@@ -62,22 +62,6 @@ const KNOWN_PLAYERS = [
   "cr01ik"
 ] as const;
 
-const TOP_TEAM_ROSTER = [
-  "TDW @#TO#",
-  "TDW Rabotnik_MiDa TDW",
-  "TDW Oioioioi",
-  "TDW paradox_net",
-  "TDW ALPHAK077"
-] as const;
-
-const BOTTOM_TEAM_ROSTER = [
-  "TDW Отец Андрей",
-  "TDW bb1",
-  "TDW Morrgot",
-  "TDW AIXX",
-  "TDW KenPark"
-] as const;
-
 const FORCED_PLAYER_ALIASES: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /c#hooh|#hooh|эф c#hooh|e#to#/i, canonical: "TDW @#TO#" },
   { pattern: /aephako77|aernako77|alphako77|alpha.?k077/i, canonical: "TDW ALPHAK077" },
@@ -355,28 +339,6 @@ function normalizePlayerName(rawName: string) {
 
   const threshold = Math.max(2, Math.floor(bestName.length * 0.35));
   return bestScore <= threshold ? bestName : cleaned;
-}
-
-function scoreCandidateName(rawName: string, candidate: string) {
-  return levenshtein(canonicalizeForMatch(rawName), canonicalizeForMatch(candidate));
-}
-
-function normalizeTeamNames(rawNames: string[], roster: readonly string[]) {
-  const fallbackNames = rawNames.length
-    ? rawNames
-    : roster.map((name) => name);
-
-  return roster.map((canonicalName, index) => {
-    const rawName = fallbackNames[index] ?? canonicalName;
-    const normalized = normalizePlayerName(rawName);
-    const score = scoreCandidateName(normalized, canonicalName);
-
-    if (!canonicalizeForMatch(normalized) || score > 4) {
-      return canonicalName;
-    }
-
-    return normalized;
-  });
 }
 
 function scoreKnownPlayer(candidate: string, text: string, lines: string[]) {
@@ -769,17 +731,38 @@ function hasEnoughColumnData(input: {
   return names >= 4 && filledColumns >= 3;
 }
 
+function ensureFiveTeamNames(names: string[], teamLabel: string) {
+  const result = uniqueStrings(
+    names
+      .map((name) => normalizePlayerName(name))
+      .filter((name) => canonicalizeForMatch(name).length > 0)
+  ).slice(0, 5);
+
+  while (result.length < 5) {
+    result.push(`${teamLabel} игрок ${result.length + 1}`);
+  }
+
+  return result;
+}
+
 function mergeTeamPlayers(input: {
-  roster: readonly string[];
+  teamLabel: string;
   rowPlayers: ParsedPlayer[];
   rowNames: string[];
   columnPlayers: ParsedPlayer[];
 }) {
-  const names = normalizeTeamNames(input.rowNames, input.roster);
   const statsSource =
     hasMeaningfulStats(input.columnPlayers) >= hasMeaningfulStats(input.rowPlayers)
       ? input.columnPlayers
       : input.rowPlayers;
+  const names = ensureFiveTeamNames(
+    [
+      ...input.rowNames,
+      ...input.rowPlayers.map((player) => player.nickname),
+      ...input.columnPlayers.map((player) => player.nickname)
+    ],
+    input.teamLabel
+  );
 
   const paddedStats = [...statsSource];
   while (paddedStats.length < 5) {
@@ -904,14 +887,14 @@ export async function parseMatchScreenshot(buffer: Buffer) {
   });
 
   const topPlayers = mergeTeamPlayers({
-    roster: TOP_TEAM_ROSTER,
+    teamLabel: "Команда 1",
     rowPlayers: topTeamRows.players,
     rowNames: topTeamRows.rawNames,
     columnPlayers: topTeamColumns.players
   });
 
   const bottomPlayers = mergeTeamPlayers({
-    roster: BOTTOM_TEAM_ROSTER,
+    teamLabel: "Команда 2",
     rowPlayers: bottomTeamRows.players,
     rowNames: bottomTeamRows.rawNames,
     columnPlayers: bottomTeamColumns.players
