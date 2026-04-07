@@ -13,7 +13,7 @@ async function getMatches() {
       orderBy: {
         uploadedAt: "desc"
       },
-      take: 10,
+      take: 3,
       include: {
         season: true,
         teams: {
@@ -107,7 +107,6 @@ async function getPlayerSeasonStats() {
         ...item,
         avgKdaPerMatch:
           item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
-        totalKda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
         avgDamagePerMatch: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
@@ -182,7 +181,6 @@ async function getPlayerMapStats() {
         ...item,
         avgKda:
           item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
-        totalKda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
         avgDamage: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
@@ -454,7 +452,6 @@ export default async function HomePage() {
                     <th>Игрок</th>
                     <th>Матчи</th>
                     <th>KDA ср.</th>
-                    <th>KDA сумм.</th>
                     <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
                   </tr>
@@ -466,7 +463,6 @@ export default async function HomePage() {
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
                       <td>{row.avgKdaPerMatch.toFixed(2)}</td>
-                      <td>{row.totalKda.toFixed(2)}</td>
                       <td>{row.avgDamagePerMatch}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
@@ -490,7 +486,6 @@ export default async function HomePage() {
                     <th>Игрок</th>
                     <th>Матчи</th>
                     <th>KDA ср.</th>
-                    <th>KDA сумм.</th>
                     <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
                   </tr>
@@ -502,7 +497,6 @@ export default async function HomePage() {
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
                       <td>{row.avgKda.toFixed(2)}</td>
-                      <td>{row.totalKda.toFixed(2)}</td>
                       <td>{row.avgDamage}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
