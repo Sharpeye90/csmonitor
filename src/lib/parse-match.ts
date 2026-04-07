@@ -61,6 +61,22 @@ const KNOWN_PLAYERS = [
   "cr01ik"
 ] as const;
 
+const TOP_TEAM_ROSTER = [
+  "TDW @#TO#",
+  "TDW Rabotnik_MiDa TDW",
+  "TDW Oioioioi",
+  "TDW paradox_net",
+  "TDW ALPHAK077"
+] as const;
+
+const BOTTOM_TEAM_ROSTER = [
+  "TDW Отец Андрей",
+  "TDW bb1",
+  "TDW Morrgot",
+  "TDW AIXX",
+  "TDW KenPark"
+] as const;
+
 const FORCED_PLAYER_ALIASES: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /c#hooh|#hooh|эф c#hooh|e#to#/i, canonical: "TDW @#TO#" },
   { pattern: /aephako77|aernako77|alphako77|alpha.?k077/i, canonical: "TDW ALPHAK077" },
@@ -77,7 +93,7 @@ const FORCED_PLAYER_ALIASES: Array<{ pattern: RegExp; canonical: string }> = [
 const SCORE_REGION: Region = { left: 0.405, top: 0.015, width: 0.17, height: 0.07 };
 const TOP_SCORE_REGION: Region = { left: 0.015, top: 0.37, width: 0.09, height: 0.16 };
 const BOTTOM_SCORE_REGION: Region = { left: 0.015, top: 0.67, width: 0.09, height: 0.16 };
-const MAP_REGION: Region = { left: 0.04, top: 0.28, width: 0.30, height: 0.08 };
+const MAP_REGION: Region = { left: 0.03, top: 0.24, width: 0.34, height: 0.11 };
 
 const TOP_TEAM: TeamBlock = {
   names: { left: 0.25, top: 0.42, width: 0.34, height: 0.19 },
@@ -338,6 +354,28 @@ function normalizePlayerName(rawName: string) {
 
   const threshold = Math.max(2, Math.floor(bestName.length * 0.35));
   return bestScore <= threshold ? bestName : cleaned;
+}
+
+function scoreCandidateName(rawName: string, candidate: string) {
+  return levenshtein(canonicalizeForMatch(rawName), canonicalizeForMatch(candidate));
+}
+
+function normalizeTeamNames(rawNames: string[], roster: readonly string[]) {
+  const fallbackNames = rawNames.length
+    ? rawNames
+    : roster.map((name) => name);
+
+  return roster.map((canonicalName, index) => {
+    const rawName = fallbackNames[index] ?? canonicalName;
+    const normalized = normalizePlayerName(rawName);
+    const score = scoreCandidateName(normalized, canonicalName);
+
+    if (!canonicalizeForMatch(normalized) || score > 4) {
+      return canonicalName;
+    }
+
+    return normalized;
+  });
 }
 
 function scoreKnownPlayer(candidate: string, text: string, lines: string[]) {
@@ -629,6 +667,7 @@ async function readTeamByRows(buffer: Buffer, block: TeamBlock) {
 
   return {
     players,
+    rawNames: rows.map((row) => row.parsedName),
     debug: Object.fromEntries(
       rows.flatMap((row, index) => [
         [`row${index + 1}NameText`, row.nameText],
@@ -638,6 +677,53 @@ async function readTeamByRows(buffer: Buffer, block: TeamBlock) {
   };
 }
 
+function hasMeaningfulStats(players: ParsedPlayer[]) {
+  return players.filter((player) => player.kills > 0 || player.deaths > 0 || player.damage > 0).length;
+}
+
+function mergeTeamPlayers(input: {
+  roster: readonly string[];
+  rowPlayers: ParsedPlayer[];
+  rowNames: string[];
+  columnPlayers: ParsedPlayer[];
+}) {
+  const names = normalizeTeamNames(input.rowNames, input.roster);
+  const statsSource =
+    hasMeaningfulStats(input.columnPlayers) >= hasMeaningfulStats(input.rowPlayers)
+      ? input.columnPlayers
+      : input.rowPlayers;
+
+  const paddedStats = [...statsSource];
+  while (paddedStats.length < 5) {
+    paddedStats.push({
+      nickname: "",
+      kills: 0,
+      deaths: 0,
+      assists: null,
+      headshotPct: 0,
+      damage: 0,
+      kda: 0
+    });
+  }
+
+  return names.map((name, index) => {
+    const stats = paddedStats[index];
+    const damage = repairDamage(stats.damage);
+    const kills = stats.kills;
+    const deaths = stats.deaths;
+
+    return {
+      nickname: name,
+      kills,
+      deaths,
+      assists: stats.assists,
+      headshotPct: stats.headshotPct,
+      damage,
+      kda: deaths === 0 ? kills : Math.round((kills / deaths) * 100) / 100
+    } satisfies ParsedPlayer;
+  });
+}
+
 export async function parseMatchScreenshot(buffer: Buffer) {
   const metadata = await sharp(buffer).metadata();
 
@@ -645,7 +731,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     throw new Error("Не удалось определить размеры изображения");
   }
 
-  const [scoreText, topScoreText, bottomScoreText, mapText, topTeamRows, bottomTeamRows, topTeamColumns, bottomTeamColumns] = await Promise.all([
+  const [scoreText, topScoreText, bottomScoreText, mapText, mapTextEng, topTeamRows, bottomTeamRows, topTeamColumns, bottomTeamColumns] = await Promise.all([
     readRegionText(buffer, SCORE_REGION, "score", [
       { psm: 7, whitelist: "0123456789:-" },
       { psm: 6, whitelist: "0123456789:-" }
@@ -659,14 +745,26 @@ export async function parseMatchScreenshot(buffer: Buffer) {
       { psm: 7, whitelist: "0123456789" }
     ]),
     readRegionText(buffer, MAP_REGION, "map", [{ psm: 6 }]),
+    readRegionText(buffer, MAP_REGION, "map", [{ psm: 7, lang: "eng" }, { psm: 6, lang: "eng" }]),
     readTeamByRows(buffer, TOP_TEAM),
     readTeamByRows(buffer, BOTTOM_TEAM),
     readTeamBlock(buffer, TOP_TEAM),
     readTeamBlock(buffer, BOTTOM_TEAM)
   ]);
 
-  const topPlayers = topTeamRows.players.length === 5 ? topTeamRows.players : topTeamColumns.players;
-  const bottomPlayers = bottomTeamRows.players.length === 5 ? bottomTeamRows.players : bottomTeamColumns.players;
+  const topPlayers = mergeTeamPlayers({
+    roster: TOP_TEAM_ROSTER,
+    rowPlayers: topTeamRows.players,
+    rowNames: topTeamRows.rawNames,
+    columnPlayers: topTeamColumns.players
+  });
+
+  const bottomPlayers = mergeTeamPlayers({
+    roster: BOTTOM_TEAM_ROSTER,
+    rowPlayers: bottomTeamRows.players,
+    rowNames: bottomTeamRows.rawNames,
+    columnPlayers: bottomTeamColumns.players
+  });
 
   if (!topPlayers.length || !bottomPlayers.length) {
     throw buildError({
@@ -674,6 +772,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
       topScoreText,
       bottomScoreText,
       mapText,
+      mapTextEng,
       topNamesText: topTeamColumns.debug.namesText,
       topKillsText: topTeamColumns.debug.killsText,
       topDeathsText: topTeamColumns.debug.deathsText,
@@ -720,7 +819,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
   const finalScoreB = Math.min(sidebarScores.top, sidebarScores.bottom);
 
   return {
-    mapName: parseMapName(mapText),
+    mapName: parseMapName(`${mapText}\n${mapTextEng}`),
     score: `${finalScoreA}-${finalScoreB}`,
     scoreA: finalScoreA,
     scoreB: finalScoreB,

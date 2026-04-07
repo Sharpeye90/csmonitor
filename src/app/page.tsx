@@ -120,11 +120,87 @@ async function getPlayerSeasonStats() {
   }
 }
 
+async function getPlayerMapStats() {
+  try {
+    const matches = await prisma.match.findMany({
+      orderBy: {
+        playedOn: "desc"
+      },
+      include: {
+        teams: {
+          include: {
+            players: true
+          }
+        }
+      }
+    });
+
+    const grouped = new Map<
+      string,
+      {
+        mapName: string;
+        nickname: string;
+        matches: number;
+        kills: number;
+        deaths: number;
+        damage: number;
+        headshotPctTotal: number;
+      }
+    >();
+
+    for (const match of matches) {
+      for (const team of match.teams) {
+        for (const player of team.players) {
+          const key = `${match.mapName}::${player.nickname}`;
+          const existing = grouped.get(key) ?? {
+            mapName: match.mapName,
+            nickname: player.nickname,
+            matches: 0,
+            kills: 0,
+            deaths: 0,
+            damage: 0,
+            headshotPctTotal: 0
+          };
+
+          existing.matches += 1;
+          existing.kills += player.kills;
+          existing.deaths += player.deaths;
+          existing.damage += player.damage;
+          existing.headshotPctTotal += player.headshotPct;
+          grouped.set(key, existing);
+        }
+      }
+    }
+
+    const mapOrder = ["Dust II", "Mirage", "Inferno", "Nuke", "Ancient", "Anubis", "Overpass"];
+
+    return Array.from(grouped.values())
+      .map((item) => ({
+        ...item,
+        kda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
+        avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
+      }))
+      .sort((left, right) => {
+        const leftIndex = mapOrder.indexOf(left.mapName);
+        const rightIndex = mapOrder.indexOf(right.mapName);
+
+        if (leftIndex !== rightIndex) {
+          return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+        }
+
+        return right.kills - left.kills;
+      });
+  } catch {
+    return [];
+  }
+}
+
 export default async function HomePage() {
-  const [matches, seasons, playerSeasonStats] = await Promise.all([
+  const [matches, seasons, playerSeasonStats, playerMapStats] = await Promise.all([
     getMatches(),
     getSeasons(),
-    getPlayerSeasonStats()
+    getPlayerSeasonStats(),
+    getPlayerMapStats()
   ]);
 
   return (
@@ -183,6 +259,46 @@ export default async function HomePage() {
           )}
         </div>
 
+        <div className="panel">
+          <h2 className="section-title">Игроки по картам</h2>
+          {playerMapStats.length ? (
+            <div className="table-scroll">
+              <table className="players-table">
+                <thead>
+                  <tr>
+                    <th>Карта</th>
+                    <th>Игрок</th>
+                    <th>Матчи</th>
+                    <th>У</th>
+                    <th>С</th>
+                    <th>KDA</th>
+                    <th>Урон</th>
+                    <th>%ГЛ ср.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playerMapStats.map((row) => (
+                    <tr key={`${row.mapName}-${row.nickname}`}>
+                      <td>{row.mapName}</td>
+                      <td>{row.nickname}</td>
+                      <td>{row.matches}</td>
+                      <td>{row.kills}</td>
+                      <td>{row.deaths}</td>
+                      <td>{row.kda.toFixed(2)}</td>
+                      <td>{row.damage}</td>
+                      <td>{row.avgHeadshotPct}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">Пока нет данных по картам.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="content-grid single-column">
         <div className="panel">
           <h2 className="section-title">Сезоны</h2>
           <div className="match-list">
