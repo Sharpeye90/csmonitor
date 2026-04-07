@@ -8,6 +8,7 @@ import type { SavedMatch, SeasonSummary } from "@/lib/types";
 type UploadState = {
   error: string | null;
   details?: Record<string, string> | null;
+  testMode?: boolean;
   match: SavedMatch | null;
 };
 
@@ -35,7 +36,9 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
     }
 
     setState(payload);
-    router.refresh();
+    if (!payload.testMode) {
+      router.refresh();
+    }
   }
 
   return (
@@ -91,15 +94,21 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
             ))}
           </select>
         </label>
+        <label className="checkbox-row">
+          <input name="testMode" type="checkbox" />
+          Тестовый режим без сохранения
+        </label>
         <button type="submit" disabled={isPending}>
-          {isPending ? "Обрабатываем..." : "Распознать и сохранить"}
+          {isPending ? "Обрабатываем..." : "Запустить"}
         </button>
       </form>
 
       {state.error ? <p className="error">{state.error}</p> : null}
       {state.details ? (
         <details style={{ marginTop: 12 }}>
-          <summary className="muted">Показать OCR-диагностику</summary>
+          <summary className="muted">
+            {state.testMode ? "Показать диагностику тестового режима" : "Показать OCR-диагностику"}
+          </summary>
           <pre
             style={{
               marginTop: 12,
@@ -125,6 +134,11 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
               <p className="muted" style={{ marginBottom: 0 }}>
                 Сезон: {parsedMatch.season?.name ?? "не назначен"}
               </p>
+              {state.testMode ? (
+                <p className="muted" style={{ marginBottom: 0 }}>
+                  Режим: тестовый, без сохранения
+                </p>
+              ) : null}
             </div>
             <span className="score-chip">
               {parsedMatch.scoreA}-{parsedMatch.scoreB}
@@ -158,7 +172,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
                         <td>{player.nickname}</td>
                         <td>{player.kills}</td>
                         <td>{player.deaths}</td>
-                        <td>{player.kda}</td>
+                        <td>{player.kda.toFixed(2)}</td>
                         <td>{player.damage}</td>
                         <td>{player.headshotPct}</td>
                       </tr>

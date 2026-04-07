@@ -47,6 +47,20 @@ const KNOWN_MAPS = [
   { canonical: "Overpass", aliases: ["overpass"] }
 ];
 
+const KNOWN_PLAYERS = [
+  "TDW Rabotnik_MiDa TDW",
+  "TDW Oioioioi",
+  "TDW paradox_net",
+  "TDW @#TO#",
+  "TDW ALPHAK077",
+  "TDW Отец Андрей",
+  "TDW bb1",
+  "TDW Morrgot",
+  "TDW AIXX",
+  "TDW KenPark",
+  "cr01ik"
+] as const;
+
 const SCORE_REGION: Region = { left: 0.405, top: 0.015, width: 0.17, height: 0.07 };
 const MAP_REGION: Region = { left: 0.11, top: 0.31, width: 0.24, height: 0.06 };
 
@@ -208,6 +222,12 @@ function cleanupName(line: string) {
   return line
     .replace(/^[\d\s]+/, "")
     .replace(/^[^\p{L}\p{N}\[]+/u, "")
+    .replace(/[\(\)\{\}]/g, "")
+    .replace(/\bTOW\b/gi, "TDW")
+    .replace(/\bDW\b/gi, "TDW")
+    .replace(/\bTO\b/gi, "TDW")
+    .replace(/\bMIDA\b/gi, "MiDa")
+    .replace(/\bnet\b/g, "_net")
     .replace(/[^\p{L}\p{N}\]_ |\-.]+$/gu, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -242,13 +262,68 @@ function uniqueStrings(values: string[]) {
   return result;
 }
 
+function canonicalizeForMatch(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/tdw/g, "")
+    .replace(/[^a-zа-яё0-9#@]+/giu, "");
+}
+
+function levenshtein(a: string, b: string) {
+  const matrix = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+
+  for (let i = 0; i <= a.length; i += 1) {
+    matrix[i][0] = i;
+  }
+
+  for (let j = 0; j <= b.length; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[a.length][b.length];
+}
+
+function normalizePlayerName(rawName: string) {
+  const cleaned = cleanupName(rawName);
+  const normalized = canonicalizeForMatch(cleaned);
+
+  if (!normalized) {
+    return cleaned;
+  }
+
+  let bestName = cleaned;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const candidate of KNOWN_PLAYERS) {
+    const score = levenshtein(normalized, canonicalizeForMatch(candidate));
+    if (score < bestScore) {
+      bestScore = score;
+      bestName = candidate;
+    }
+  }
+
+  const threshold = Math.max(2, Math.floor(bestName.length * 0.35));
+  return bestScore <= threshold ? bestName : cleaned;
+}
+
 function parseNameLines(text: string) {
   return uniqueStrings(
     text
       .split("\n")
       .map((line) => line.trim())
       .filter(isProbablyName)
-      .map(cleanupName)
+      .map(normalizePlayerName)
       .filter((line) => line.length >= 3)
   );
 }
@@ -275,15 +350,19 @@ function pairTeamPlayers(
   headshotPct: number[],
   damage: number[]
 ) {
-  const candidateLengths = [names.length, kills.length, deaths.length, assists.length, headshotPct.length, damage.length]
+  const candidateLengths = [kills.length, deaths.length, assists.length, headshotPct.length, damage.length]
     .filter((value) => value > 0);
-  const expected = candidateLengths.length ? Math.min(...candidateLengths) : 0;
+  const expected = candidateLengths.length ? Math.min(5, ...candidateLengths) : 0;
 
-  if (expected < 3) {
+  if (expected < 5 || names.length < 5) {
     return [];
   }
 
-  const normalizedNames = names.slice(0, expected);
+  const normalizedNames = uniqueStrings(names).slice(0, 5);
+  if (normalizedNames.length < 5) {
+    return [];
+  }
+
   const normalizedKills = alignColumn(kills, expected);
   const normalizedDeaths = alignColumn(deaths, expected);
   const normalizedAssists = alignColumn(assists, expected);
@@ -301,7 +380,7 @@ function pairTeamPlayers(
       assists: normalizedAssists[index] ?? null,
       headshotPct: normalizedHeadshots[index] ?? 0,
       damage: normalizedDamage[index] ?? 0,
-      kda: `${playerKills}/${playerDeaths}`
+      kda: playerDeaths === 0 ? playerKills : Math.round((playerKills / playerDeaths) * 100) / 100
     } satisfies ParsedPlayer;
   }).filter((player) => player.nickname && (player.kills > 0 || player.deaths > 0 || player.damage > 0));
 }

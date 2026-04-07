@@ -104,7 +104,7 @@ async function getPlayerSeasonStats() {
     return Array.from(grouped.values())
       .map((item) => ({
         ...item,
-        kda: `${item.kills}/${item.deaths}`,
+        kda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
       .sort((left, right) => {
@@ -166,7 +166,7 @@ export default async function HomePage() {
                       <td>{row.matches}</td>
                       <td>{row.kills}</td>
                       <td>{row.deaths}</td>
-                      <td>{row.kda}</td>
+                      <td>{row.kda.toFixed(2)}</td>
                       <td>{row.damage}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
@@ -247,7 +247,7 @@ export default async function HomePage() {
                                 <td>{player.nickname}</td>
                                 <td>{player.kills}</td>
                                 <td>{player.deaths}</td>
-                                <td>{player.kda}</td>
+                                <td>{player.kda.toFixed(2)}</td>
                                 <td>{player.damage}</td>
                                 <td>{player.headshotPct}</td>
                               </tr>

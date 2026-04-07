@@ -81,6 +81,17 @@ select {
   color: var(--muted);
 }
 
+.checkbox-row {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+}
+
 .upload-form input[type="file"] {
   width: 100%;
   padding: 18px;

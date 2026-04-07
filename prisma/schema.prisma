@@ -58,7 +58,7 @@ model PlayerStat {
   kills          Int
   deaths         Int
   assists        Int?
-  kda            String
+  kda            Float
   damage         Int
   headshotPct    Float
   createdAt      DateTime @default(now())

@@ -5,7 +5,7 @@ export type ParsedPlayer = {
   assists: number | null;
   damage: number;
   headshotPct: number;
-  kda: string;
+  kda: number;
 };
 
 export type ParsedTeam = {
@@ -36,5 +36,12 @@ export type SavedMatch = {
   scoreA: number;
   scoreB: number;
   season: SeasonSummary | null;
+  teams: ParsedTeam[];
+};
+
+export type ParsePreview = {
+  mapName: string;
+  scoreA: number;
+  scoreB: number;
   teams: ParsedTeam[];
 };
