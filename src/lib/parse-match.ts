@@ -97,7 +97,7 @@ const BOTTOM_SCORE_REGION: Region = { left: 0.015, top: 0.67, width: 0.09, heigh
 const MAP_REGION: Region = { left: 0.03, top: 0.24, width: 0.34, height: 0.11 };
 
 const TOP_TEAM: TeamBlock = {
-  names: { left: 0.235, top: 0.435, width: 0.355, height: 0.19 },
+  names: { left: 0.235, top: 0.428, width: 0.355, height: 0.19 },
   kills: { left: 0.61, top: 0.42, width: 0.045, height: 0.19 },
   deaths: { left: 0.665, top: 0.42, width: 0.045, height: 0.19 },
   assists: { left: 0.72, top: 0.42, width: 0.045, height: 0.19 },
@@ -107,11 +107,11 @@ const TOP_TEAM: TeamBlock = {
 
 const BOTTOM_TEAM: TeamBlock = {
   names: { left: 0.235, top: 0.705, width: 0.355, height: 0.18 },
-  kills: { left: 0.61, top: 0.73, width: 0.045, height: 0.15 },
-  deaths: { left: 0.665, top: 0.73, width: 0.045, height: 0.15 },
-  assists: { left: 0.72, top: 0.73, width: 0.045, height: 0.15 },
-  headshotPct: { left: 0.775, top: 0.73, width: 0.055, height: 0.15 },
-  damage: { left: 0.82, top: 0.73, width: 0.085, height: 0.15 }
+  kills: { left: 0.61, top: 0.75, width: 0.045, height: 0.13 },
+  deaths: { left: 0.665, top: 0.75, width: 0.045, height: 0.13 },
+  assists: { left: 0.72, top: 0.75, width: 0.045, height: 0.13 },
+  headshotPct: { left: 0.775, top: 0.75, width: 0.055, height: 0.13 },
+  damage: { left: 0.82, top: 0.75, width: 0.085, height: 0.13 }
 };
 
 function clampRegion(metadata: sharp.Metadata, region: Region) {
