@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -35,12 +36,12 @@ def preprocess(image, mode):
     if mode in {"score", "stats"}:
         scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         _, thresholded = cv2.threshold(scaled, 155, 255, cv2.THRESH_BINARY)
-        return thresholded
+        return cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR)
     if mode == "map":
         scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        return cv2.equalizeHist(scaled)
+        return cv2.cvtColor(cv2.equalizeHist(scaled), cv2.COLOR_GRAY2BGR)
     scaled = cv2.resize(gray, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-    return cv2.GaussianBlur(scaled, (3, 3), 0)
+    return cv2.cvtColor(cv2.GaussianBlur(scaled, (3, 3), 0), cv2.COLOR_GRAY2BGR)
 
 
 _OCRS = {}
@@ -59,10 +60,71 @@ def get_ocr(lang):
 
 def extract_text(ocr_result):
     texts = []
-    for item in ocr_result:
-        if isinstance(item, dict):
-            texts.extend(item.get("rec_texts", []))
+
+    def collect(value):
+        if value is None:
+            return
+
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                texts.append(text)
+            return
+
+        if isinstance(value, dict):
+            rec_texts = value.get("rec_texts")
+            if isinstance(rec_texts, list):
+                for text in rec_texts:
+                    collect(text)
+
+            for key in ("text", "label"):
+                if key in value:
+                    collect(value[key])
+
+            if "res" in value:
+                collect(value["res"])
+            return
+
+        if isinstance(value, (list, tuple)):
+            if len(value) == 2 and isinstance(value[1], (list, tuple)) and value[1]:
+                collect(value[1][0])
+                return
+
+            for item in value:
+                collect(item)
+            return
+
+        for attr in ("rec_texts", "texts", "text"):
+            if hasattr(value, attr):
+                collect(getattr(value, attr))
+
+    collect(ocr_result)
     return "\n".join([text for text in texts if text]).strip()
+
+
+def predict_text(ocr, processed):
+    try:
+        prediction = ocr.predict(processed)
+        text = extract_text(prediction)
+        if text:
+            return text
+    except Exception:
+        pass
+
+    fd, temp_path = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    try:
+        cv2.imwrite(temp_path, processed)
+        prediction = ocr.ocr(temp_path, cls=False)
+        text = extract_text(prediction)
+        if text:
+            return text
+        return ""
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def main():
@@ -89,8 +151,7 @@ def main():
         text = ""
         try:
             ocr = get_ocr(lang)
-            prediction = ocr.predict(processed)
-            text = extract_text(prediction)
+            text = predict_text(ocr, processed)
         except Exception as exc:
             text = f"__OCR_ERROR__ {exc}"
 
@@ -99,7 +160,7 @@ def main():
                 "name": region["name"],
                 "text": text,
                 "image": encode_png(crop),
-                "processedImage": encode_png(processed if len(processed.shape) == 2 else cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)),
+                "processedImage": encode_png(processed),
             }
         )
 
