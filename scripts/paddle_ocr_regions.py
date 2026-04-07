@@ -55,6 +55,9 @@ def get_ocr(lang):
     if lang not in _OCRS:
         _OCRS[lang] = PaddleOCR(
             lang=lang,
+            device="cpu",
+            enable_mkldnn=False,
+            cpu_threads=4,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
