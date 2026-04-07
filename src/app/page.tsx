@@ -105,7 +105,10 @@ async function getPlayerSeasonStats() {
     return Array.from(grouped.values())
       .map((item) => ({
         ...item,
-        kda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
+        avgKdaPerMatch:
+          item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
+        totalKda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
+        avgDamagePerMatch: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
       .sort((left, right) => {
@@ -113,7 +116,7 @@ async function getPlayerSeasonStats() {
           return left.seasonName.localeCompare(right.seasonName, "ru");
         }
 
-        return right.kills - left.kills;
+        return right.avgDamagePerMatch - left.avgDamagePerMatch;
       });
   } catch {
     return [];
@@ -177,7 +180,10 @@ async function getPlayerMapStats() {
     return Array.from(grouped.values())
       .map((item) => ({
         ...item,
-        kda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
+        avgKda:
+          item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
+        totalKda: item.deaths === 0 ? item.kills : Math.round((item.kills / item.deaths) * 100) / 100,
+        avgDamage: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
       .sort((left, right) => {
@@ -188,19 +194,235 @@ async function getPlayerMapStats() {
           return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
         }
 
-        return right.kills - left.kills;
+        return right.avgDamage - left.avgDamage;
       });
   } catch {
     return [];
   }
 }
 
+function getPlayedOnDayKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function rankValuesDescending<T>(rows: T[], pickValue: (row: T) => number) {
+  const sortedValues = Array.from(new Set(rows.map(pickValue))).sort((left, right) => right - left);
+  return new Map(sortedValues.map((value, index) => [value, index + 1]));
+}
+
+type TrendDirection = "up" | "down" | "flat";
+
+async function getDailyPlayerRatings() {
+  try {
+    const matches = await prisma.match.findMany({
+      orderBy: {
+        playedOn: "desc"
+      },
+      include: {
+        season: true,
+        teams: {
+          include: {
+            players: true
+          }
+        }
+      }
+    });
+
+    const grouped = new Map<
+      string,
+      {
+        playedOn: Date;
+        playedOnKey: string;
+        seasonName: string;
+        nickname: string;
+        matches: number;
+        kdaTotal: number;
+        damageTotal: number;
+      }
+    >();
+
+    for (const match of matches) {
+      const playedOnKey = getPlayedOnDayKey(match.playedOn);
+      const seasonName = match.season?.name ?? "Без сезона";
+
+      for (const team of match.teams) {
+        for (const player of team.players) {
+          const key = `${playedOnKey}::${player.nickname}`;
+          const existing = grouped.get(key) ?? {
+            playedOn: match.playedOn,
+            playedOnKey,
+            seasonName,
+            nickname: player.nickname,
+            matches: 0,
+            kdaTotal: 0,
+            damageTotal: 0
+          };
+
+          existing.matches += 1;
+          existing.kdaTotal += player.kda;
+          existing.damageTotal += player.damage;
+          grouped.set(key, existing);
+        }
+      }
+    }
+
+    const byDay = new Map<string, Array<(typeof grouped extends Map<string, infer V> ? V : never)>>();
+    for (const row of grouped.values()) {
+      const rows = byDay.get(row.playedOnKey) ?? [];
+      rows.push(row);
+      byDay.set(row.playedOnKey, rows);
+    }
+
+    const rankedRows: Array<{
+      playedOn: Date;
+      playedOnKey: string;
+      seasonName: string;
+      nickname: string;
+      matches: number;
+      avgKda: number;
+      avgDamage: number;
+      kdaRank: number;
+      damageRank: number;
+      points: number;
+    }> = [];
+
+    for (const rows of byDay.values()) {
+      const enriched = rows.map((row) => ({
+        ...row,
+        avgKda: Math.round((row.kdaTotal / row.matches) * 100) / 100,
+        avgDamage: Math.round(row.damageTotal / row.matches)
+      }));
+      const kdaRanks = rankValuesDescending(enriched, (row) => row.avgKda);
+      const damageRanks = rankValuesDescending(enriched, (row) => row.avgDamage);
+
+      for (const row of enriched) {
+        const kdaRank = kdaRanks.get(row.avgKda) ?? enriched.length;
+        const damageRank = damageRanks.get(row.avgDamage) ?? enriched.length;
+
+        rankedRows.push({
+          playedOn: row.playedOn,
+          playedOnKey: row.playedOnKey,
+          seasonName: row.seasonName,
+          nickname: row.nickname,
+          matches: row.matches,
+          avgKda: row.avgKda,
+          avgDamage: row.avgDamage,
+          kdaRank,
+          damageRank,
+          points: (kdaRank + damageRank) * 10
+        });
+      }
+    }
+
+    return rankedRows.sort((left, right) => {
+      if (left.playedOnKey !== right.playedOnKey) {
+        return left.playedOnKey < right.playedOnKey ? 1 : -1;
+      }
+
+      return left.points - right.points;
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function getSeasonPlayerRatings() {
+  try {
+    const dailyRatings = await getDailyPlayerRatings();
+    const grouped = new Map<
+      string,
+      {
+        seasonName: string;
+        nickname: string;
+        days: number;
+        totalPoints: number;
+        avgKdaTotal: number;
+        avgDamageTotal: number;
+        recentPoints: Array<{ playedOnKey: string; points: number }>;
+      }
+    >();
+
+    for (const row of dailyRatings) {
+      const key = `${row.seasonName}::${row.nickname}`;
+      const existing = grouped.get(key) ?? {
+        seasonName: row.seasonName,
+        nickname: row.nickname,
+        days: 0,
+        totalPoints: 0,
+        avgKdaTotal: 0,
+        avgDamageTotal: 0,
+        recentPoints: []
+      };
+
+      existing.days += 1;
+      existing.totalPoints += row.points;
+      existing.avgKdaTotal += row.avgKda;
+      existing.avgDamageTotal += row.avgDamage;
+      existing.recentPoints.push({ playedOnKey: row.playedOnKey, points: row.points });
+      grouped.set(key, existing);
+    }
+
+    return Array.from(grouped.values())
+      .map((row) => {
+        const recentPoints = row.recentPoints
+          .sort((left, right) => left.playedOnKey.localeCompare(right.playedOnKey))
+          .slice(-2);
+        const previousPoints = recentPoints.length >= 2 ? recentPoints[recentPoints.length - 2].points : null;
+        const latestPoints = recentPoints.length >= 1 ? recentPoints[recentPoints.length - 1].points : null;
+        const trend: TrendDirection =
+          previousPoints == null || latestPoints == null
+            ? "flat"
+            : latestPoints < previousPoints
+              ? "up"
+              : latestPoints > previousPoints
+                ? "down"
+                : "flat";
+
+        return {
+          seasonName: row.seasonName,
+          nickname: row.nickname,
+          days: row.days,
+          totalPoints: row.totalPoints,
+          avgPointsPerDay: Math.round((row.totalPoints / row.days) * 10) / 10,
+          avgKda: Math.round((row.avgKdaTotal / row.days) * 100) / 100,
+          avgDamage: Math.round(row.avgDamageTotal / row.days),
+          trend,
+          previousPoints,
+          latestPoints
+        };
+      })
+      .sort((left, right) => {
+        if (left.seasonName !== right.seasonName) {
+          return left.seasonName.localeCompare(right.seasonName, "ru");
+        }
+
+        return left.totalPoints - right.totalPoints;
+      });
+  } catch {
+    return [];
+  }
+}
+
+function renderTrend(trend: TrendDirection) {
+  if (trend === "up") {
+    return <span className="trend trend-up">↑</span>;
+  }
+
+  if (trend === "down") {
+    return <span className="trend trend-down">↓</span>;
+  }
+
+  return <span className="trend trend-flat">→</span>;
+}
+
 export default async function HomePage() {
-  const [matches, seasons, playerSeasonStats, playerMapStats] = await Promise.all([
+  const [matches, seasons, playerSeasonStats, playerMapStats, dailyPlayerRatings, seasonPlayerRatings] = await Promise.all([
     getMatches(),
     getSeasons(),
     getPlayerSeasonStats(),
-    getPlayerMapStats()
+    getPlayerMapStats(),
+    getDailyPlayerRatings(),
+    getSeasonPlayerRatings()
   ]);
 
   return (
@@ -231,10 +453,9 @@ export default async function HomePage() {
                     <th>Сезон</th>
                     <th>Игрок</th>
                     <th>Матчи</th>
-                    <th>У</th>
-                    <th>С</th>
-                    <th>KDA</th>
-                    <th>Урон</th>
+                    <th>KDA ср.</th>
+                    <th>KDA сумм.</th>
+                    <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
                   </tr>
                 </thead>
@@ -244,10 +465,9 @@ export default async function HomePage() {
                       <td>{row.seasonName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
-                      <td>{row.kills}</td>
-                      <td>{row.deaths}</td>
-                      <td>{row.kda.toFixed(2)}</td>
-                      <td>{row.damage}</td>
+                      <td>{row.avgKdaPerMatch.toFixed(2)}</td>
+                      <td>{row.totalKda.toFixed(2)}</td>
+                      <td>{row.avgDamagePerMatch}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
                   ))}
@@ -269,10 +489,9 @@ export default async function HomePage() {
                     <th>Карта</th>
                     <th>Игрок</th>
                     <th>Матчи</th>
-                    <th>У</th>
-                    <th>С</th>
-                    <th>KDA</th>
-                    <th>Урон</th>
+                    <th>KDA ср.</th>
+                    <th>KDA сумм.</th>
+                    <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
                   </tr>
                 </thead>
@@ -282,10 +501,9 @@ export default async function HomePage() {
                       <td>{row.mapName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
-                      <td>{row.kills}</td>
-                      <td>{row.deaths}</td>
-                      <td>{row.kda.toFixed(2)}</td>
-                      <td>{row.damage}</td>
+                      <td>{row.avgKda.toFixed(2)}</td>
+                      <td>{row.totalKda.toFixed(2)}</td>
+                      <td>{row.avgDamage}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
                   ))}
@@ -294,6 +512,88 @@ export default async function HomePage() {
             </div>
           ) : (
             <p className="muted">Пока нет данных по картам.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="content-grid single-column">
+        <div className="panel">
+          <h2 className="section-title">Рейтинг За День</h2>
+          {dailyPlayerRatings.length ? (
+            <div className="table-scroll">
+              <table className="players-table">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Сезон</th>
+                    <th>Игрок</th>
+                    <th>Матчи</th>
+                    <th>KDA ср.</th>
+                    <th>KDA место</th>
+                    <th>Урон ср.</th>
+                    <th>Урон место</th>
+                    <th>Очки</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dailyPlayerRatings.map((row) => (
+                    <tr key={`${row.playedOnKey}-${row.nickname}`}>
+                      <td>{formatRuDate(row.playedOn, timeZone)}</td>
+                      <td>{row.seasonName}</td>
+                      <td>{row.nickname}</td>
+                      <td>{row.matches}</td>
+                      <td>{row.avgKda.toFixed(2)}</td>
+                      <td>{row.kdaRank}</td>
+                      <td>{row.avgDamage}</td>
+                      <td>{row.damageRank}</td>
+                      <td>{row.points}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">Пока нет дневного рейтинга.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="content-grid single-column">
+        <div className="panel">
+          <h2 className="section-title">Рейтинг За Сезон</h2>
+          {seasonPlayerRatings.length ? (
+            <div className="table-scroll">
+              <table className="players-table">
+                <thead>
+                  <tr>
+                    <th>Сезон</th>
+                    <th>Игрок</th>
+                    <th>Игровые дни</th>
+                    <th>KDA ср.</th>
+                    <th>Урон ср.</th>
+                    <th>Очки за день ср.</th>
+                    <th>Очки за сезон</th>
+                    <th>Тренд</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {seasonPlayerRatings.map((row) => (
+                    <tr key={`${row.seasonName}-${row.nickname}`}>
+                      <td>{row.seasonName}</td>
+                      <td>{row.nickname}</td>
+                      <td>{row.days}</td>
+                      <td>{row.avgKda.toFixed(2)}</td>
+                      <td>{row.avgDamage}</td>
+                      <td>{row.avgPointsPerDay}</td>
+                      <td>{row.totalPoints}</td>
+                      <td>{renderTrend(row.trend)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">Пока нет сезонного рейтинга.</p>
           )}
         </div>
       </section>

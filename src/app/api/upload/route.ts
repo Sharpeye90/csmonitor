@@ -43,7 +43,9 @@ function toClientMatch(input: {
   return {
     id: input.id,
     uploadedAt: input.uploadedAt.toISOString(),
+    uploadedAtIso: input.uploadedAt.toISOString(),
     playedOn: formatRuDate(input.playedOn, timeZone),
+    playedOnIso: input.playedOn.toISOString(),
     mapName: input.mapName,
     scoreA: input.scoreA,
     scoreB: input.scoreB,

@@ -31,7 +31,9 @@ export type SeasonSummary = {
 export type SavedMatch = {
   id: string;
   uploadedAt: string;
+  uploadedAtIso?: string;
   playedOn: string;
+  playedOnIso?: string;
   mapName: string;
   scoreA: number;
   scoreB: number;
