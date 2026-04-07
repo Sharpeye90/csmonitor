@@ -8,3 +8,4 @@ dist
 coverage
 generated
 prisma/dev.db
+scripts/__pycache__

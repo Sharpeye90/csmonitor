@@ -115,10 +115,23 @@ def predict_text(ocr, processed):
     os.close(fd)
     try:
         cv2.imwrite(temp_path, processed)
-        prediction = ocr.ocr(temp_path, cls=False)
-        text = extract_text(prediction)
-        if text:
-            return text
+        attempts = [
+            lambda: ocr.predict(temp_path),
+            lambda: ocr.ocr(temp_path),
+            lambda: ocr.ocr(processed),
+        ]
+
+        for attempt in attempts:
+            try:
+                prediction = attempt()
+                text = extract_text(prediction)
+                if text:
+                    return text
+            except TypeError:
+                continue
+            except Exception:
+                continue
+
         return ""
     finally:
         try:
