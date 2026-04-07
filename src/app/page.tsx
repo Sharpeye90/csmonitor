@@ -665,7 +665,7 @@ export default async function HomePage() {
                           <span>{team.score}</span>
                         </header>
 
-                        <table className="players-table">
+                        <table className="players-table recent-match-table">
                           <thead>
                             <tr>
                               <th>Игрок</th>

@@ -261,6 +261,40 @@ select {
   font-weight: 600;
 }
 
+.recent-match-table {
+  table-layout: fixed;
+}
+
+.recent-match-table th:nth-child(1),
+.recent-match-table td:nth-child(1) {
+  width: 42%;
+}
+
+.recent-match-table th:nth-child(2),
+.recent-match-table td:nth-child(2),
+.recent-match-table th:nth-child(3),
+.recent-match-table td:nth-child(3),
+.recent-match-table th:nth-child(6),
+.recent-match-table td:nth-child(6) {
+  width: 10%;
+}
+
+.recent-match-table th:nth-child(4),
+.recent-match-table td:nth-child(4) {
+  width: 12%;
+}
+
+.recent-match-table th:nth-child(5),
+.recent-match-table td:nth-child(5) {
+  width: 16%;
+}
+
+.recent-match-table td:nth-child(1) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table-scroll {
   overflow-x: auto;
 }
