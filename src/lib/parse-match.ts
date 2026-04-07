@@ -107,11 +107,11 @@ const TOP_TEAM: TeamBlock = {
 
 const BOTTOM_TEAM: TeamBlock = {
   names: { left: 0.235, top: 0.705, width: 0.355, height: 0.18 },
-  kills: { left: 0.61, top: 0.75, width: 0.045, height: 0.13 },
-  deaths: { left: 0.665, top: 0.75, width: 0.045, height: 0.13 },
-  assists: { left: 0.72, top: 0.75, width: 0.045, height: 0.13 },
-  headshotPct: { left: 0.775, top: 0.75, width: 0.055, height: 0.13 },
-  damage: { left: 0.82, top: 0.75, width: 0.085, height: 0.13 }
+  kills: { left: 0.61, top: 0.728, width: 0.045, height: 0.165 },
+  deaths: { left: 0.665, top: 0.728, width: 0.045, height: 0.165 },
+  assists: { left: 0.72, top: 0.728, width: 0.045, height: 0.165 },
+  headshotPct: { left: 0.775, top: 0.728, width: 0.055, height: 0.165 },
+  damage: { left: 0.82, top: 0.728, width: 0.085, height: 0.165 }
 };
 
 function clampRegion(metadata: sharp.Metadata, region: Region) {

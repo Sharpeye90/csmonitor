@@ -22,6 +22,7 @@ export type OcrRegionResult = {
   text: string;
   image: string;
   processedImage: string;
+  debug?: unknown;
 };
 
 export async function readRegionsWithPaddleOCR(regions: OcrRegionManifest[], imageBuffer: Buffer) {

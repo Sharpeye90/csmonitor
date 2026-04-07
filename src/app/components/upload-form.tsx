@@ -8,7 +8,7 @@ import type { SavedMatch, SeasonSummary } from "@/lib/types";
 type UploadDetails = {
   parsedPreview?: string;
   ocrTexts?: Record<string, string>;
-  zones?: Array<{ name: string; image: string; processedImage: string; text: string }>;
+  zones?: Array<{ name: string; image: string; processedImage: string; text: string; debug?: unknown }>;
 };
 
 type UploadState = {
@@ -141,6 +141,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
                   <img src={zone.image} alt={zone.name} />
                   <img src={zone.processedImage} alt={`${zone.name} processed`} />
                   <pre>{zone.text || "(empty)"}</pre>
+                  <pre>{JSON.stringify(zone.debug ?? null, null, 2)}</pre>
                 </div>
               ))}
             </div>

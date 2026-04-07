@@ -116,6 +116,11 @@ def score_text(text):
     return len(compact) + alnum * 2 + lines * 4
 
 
+def preview_texts(ocr_result):
+    texts = extract_text(ocr_result).splitlines()
+    return [text for text in texts if text][:20]
+
+
 def try_predict(ocr, payload):
     attempts = [
         lambda: ocr.predict(payload),
@@ -124,21 +129,42 @@ def try_predict(ocr, payload):
 
     best_text = ""
     best_score = 0
+    debug_attempts = []
 
-    for attempt in attempts:
+    for index, attempt in enumerate(attempts):
         try:
             prediction = attempt()
             text = extract_text(prediction)
             text_score = score_text(text)
+            debug_attempts.append(
+                {
+                    "method": "predict" if index == 0 else "ocr",
+                    "text": text,
+                    "score": text_score,
+                    "tokens": preview_texts(prediction),
+                }
+            )
             if text_score > best_score:
                 best_text = text
                 best_score = text_score
         except TypeError:
+            debug_attempts.append(
+                {
+                    "method": "predict" if index == 0 else "ocr",
+                    "error": "TypeError",
+                }
+            )
             continue
-        except Exception:
+        except Exception as exc:
+            debug_attempts.append(
+                {
+                    "method": "predict" if index == 0 else "ocr",
+                    "error": str(exc),
+                }
+            )
             continue
 
-    return best_text
+    return best_text, debug_attempts
 
 
 def predict_text(ocr, images):
@@ -147,22 +173,44 @@ def predict_text(ocr, images):
     try:
         best_text = ""
         best_score = 0
+        best_source = None
+        debug_attempts = []
 
-        for image in images:
-            text = try_predict(ocr, image)
+        for source_name, image in images:
+            text, source_attempts = try_predict(ocr, image)
             text_score = score_text(text)
+            debug_attempts.append(
+                {
+                    "source": source_name,
+                    "input": "array",
+                    "attempts": source_attempts,
+                }
+            )
             if text_score > best_score:
                 best_text = text
                 best_score = text_score
+                best_source = f"{source_name}:array"
 
             cv2.imwrite(temp_path, image)
-            text = try_predict(ocr, temp_path)
+            text, source_attempts = try_predict(ocr, temp_path)
             text_score = score_text(text)
+            debug_attempts.append(
+                {
+                    "source": source_name,
+                    "input": "path",
+                    "attempts": source_attempts,
+                }
+            )
             if text_score > best_score:
                 best_text = text
                 best_score = text_score
+                best_source = f"{source_name}:path"
 
-        return best_text
+        return best_text, {
+            "bestSource": best_source,
+            "bestScore": best_score,
+            "attempts": debug_attempts,
+        }
     finally:
         try:
             os.unlink(temp_path)
@@ -194,11 +242,27 @@ def main():
         enlarged_processed = upscale(processed, 1.5)
         lang = region.get("lang", "ru")
         text = ""
+        debug = {
+            "mode": region.get("mode", "names"),
+            "lang": lang,
+            "cropSize": [int(crop.shape[1]), int(crop.shape[0])],
+            "processedSize": [int(processed.shape[1]), int(processed.shape[0])],
+        }
         try:
             ocr = get_ocr(lang)
-            text = predict_text(ocr, [crop, enlarged_crop, processed, enlarged_processed])
+            text, ocr_debug = predict_text(
+                ocr,
+                [
+                    ("crop", crop),
+                    ("enlargedCrop", enlarged_crop),
+                    ("processed", processed),
+                    ("enlargedProcessed", enlarged_processed),
+                ],
+            )
+            debug["ocr"] = ocr_debug
         except Exception as exc:
             text = f"__OCR_ERROR__ {exc}"
+            debug["error"] = str(exc)
 
         result["regions"].append(
             {
@@ -206,6 +270,7 @@ def main():
                 "text": text,
                 "image": encode_png(crop),
                 "processedImage": encode_png(processed),
+                "debug": debug,
             }
         )
 
