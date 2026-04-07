@@ -317,8 +317,48 @@ function normalizePlayerName(rawName: string) {
   return bestScore <= threshold ? bestName : cleaned;
 }
 
+function scoreKnownPlayer(candidate: string, text: string, lines: string[]) {
+  const normalizedCandidate = canonicalizeForMatch(candidate);
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const line of lines) {
+    const cleaned = canonicalizeForMatch(line);
+    if (!cleaned) {
+      continue;
+    }
+
+    const score = levenshtein(normalizedCandidate, cleaned);
+    if (score < bestScore) {
+      bestScore = score;
+    }
+  }
+
+  const mergedText = canonicalizeForMatch(text);
+  if (mergedText.includes(normalizedCandidate)) {
+    bestScore = 0;
+  }
+
+  return bestScore;
+}
+
+function extractKnownPlayers(text: string) {
+  const lines = text
+    .split("\n")
+    .map((line) => cleanupName(line))
+    .filter(Boolean);
+
+  const scored = KNOWN_PLAYERS.map((candidate) => ({
+    candidate,
+    score: scoreKnownPlayer(candidate, text, lines)
+  }))
+    .filter((item) => item.score <= Math.max(3, Math.floor(item.candidate.length * 0.4)))
+    .sort((left, right) => left.score - right.score);
+
+  return uniqueStrings(scored.map((item) => item.candidate));
+}
+
 function parseNameLines(text: string) {
-  return uniqueStrings(
+  const parsed = uniqueStrings(
     text
       .split("\n")
       .map((line) => line.trim())
@@ -326,6 +366,9 @@ function parseNameLines(text: string) {
       .map(normalizePlayerName)
       .filter((line) => line.length >= 3)
   );
+
+  const known = extractKnownPlayers(text);
+  return uniqueStrings([...parsed, ...known]);
 }
 
 function parseNumbers(text: string, min: number, max: number) {
@@ -335,11 +378,12 @@ function parseNumbers(text: string, min: number, max: number) {
 }
 
 function alignColumn(numbers: number[], expected: number) {
-  if (numbers.length >= expected) {
-    return numbers.slice(0, expected);
+  const sliced = numbers.slice(0, expected);
+  if (sliced.length < expected) {
+    return [...sliced, ...new Array<number>(expected - sliced.length).fill(0)];
   }
 
-  return numbers;
+  return sliced;
 }
 
 function pairTeamPlayers(
@@ -352,9 +396,9 @@ function pairTeamPlayers(
 ) {
   const candidateLengths = [kills.length, deaths.length, assists.length, headshotPct.length, damage.length]
     .filter((value) => value > 0);
-  const expected = candidateLengths.length ? Math.min(5, ...candidateLengths) : 0;
+  const expected = 5;
 
-  if (expected < 5 || names.length < 5) {
+  if (!candidateLengths.length || names.length < 4) {
     return [];
   }
 
@@ -382,7 +426,7 @@ function pairTeamPlayers(
       damage: normalizedDamage[index] ?? 0,
       kda: playerDeaths === 0 ? playerKills : Math.round((playerKills / playerDeaths) * 100) / 100
     } satisfies ParsedPlayer;
-  }).filter((player) => player.nickname && (player.kills > 0 || player.deaths > 0 || player.damage > 0));
+  }).filter((player) => player.nickname);
 }
 
 function parseScoreText(text: string) {

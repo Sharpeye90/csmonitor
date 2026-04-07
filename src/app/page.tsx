@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { formatRuDate } from "@/lib/date";
+import { ResetDatabaseButton } from "@/app/components/reset-database-button";
 import { SeasonForm } from "@/app/components/season-form";
 import { UploadForm } from "@/app/components/upload-form";
 
@@ -137,7 +138,10 @@ export default async function HomePage() {
             endDate: season.endDate.toISOString()
           }))}
         />
-        <SeasonForm />
+        <div className="stacked-panels">
+          <SeasonForm />
+          <ResetDatabaseButton />
+        </div>
       </section>
 
       <section className="content-grid">
