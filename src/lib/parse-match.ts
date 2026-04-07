@@ -748,6 +748,27 @@ function hasMeaningfulStats(players: ParsedPlayer[]) {
   return players.filter((player) => player.kills > 0 || player.deaths > 0 || player.damage > 0).length;
 }
 
+function hasEnoughColumnData(input: {
+  namesText: string;
+  killsText: string;
+  deathsText: string;
+  assistsText: string;
+  headshotText: string;
+  damageText: string;
+}) {
+  const names = parseNameLines(input.namesText).length;
+  const statsColumns = [
+    parseNumbers(input.killsText, 0, 60).length,
+    parseNumbers(input.deathsText, 0, 60).length,
+    parseNumbers(input.assistsText, 0, 30).length,
+    parseNumbers(input.headshotText, 0, 100).length,
+    parseNumbers(input.damageText, 0, 5000).length
+  ];
+
+  const filledColumns = statsColumns.filter((count) => count >= 4).length;
+  return names >= 4 && filledColumns >= 3;
+}
+
 function mergeTeamPlayers(input: {
   roster: readonly string[];
   rowPlayers: ParsedPlayer[];
@@ -798,7 +819,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     throw new Error("Не удалось определить размеры изображения");
   }
 
-  const manifests: OcrRegionManifest[] = [
+  const baseManifests: OcrRegionManifest[] = [
     { name: "scoreText", ...SCORE_REGION, mode: "score", lang: "en" },
     { name: "topScoreText", ...TOP_SCORE_REGION, mode: "score", lang: "en" },
     { name: "bottomScoreText", ...BOTTOM_SCORE_REGION, mode: "score", lang: "en" },
@@ -815,18 +836,52 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     { name: "bottomDeathsText", ...BOTTOM_TEAM.deaths, mode: "stats", lang: "en" },
     { name: "bottomAssistsText", ...BOTTOM_TEAM.assists, mode: "stats", lang: "en" },
     { name: "bottomHeadshotText", ...BOTTOM_TEAM.headshotPct, mode: "stats", lang: "en" },
-    { name: "bottomDamageText", ...BOTTOM_TEAM.damage, mode: "stats", lang: "en" },
-    ...Array.from({ length: 5 }, (_, index) => [
-      { name: `topRow${index + 1}NameText`, ...buildRowRegion(TOP_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
-      { name: `topRow${index + 1}StatsText`, ...buildStatsRowRegion(TOP_TEAM, index), mode: "stats" as const, lang: "en" as const },
-      { name: `bottomRow${index + 1}NameText`, ...buildRowRegion(BOTTOM_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
-      { name: `bottomRow${index + 1}StatsText`, ...buildStatsRowRegion(BOTTOM_TEAM, index), mode: "stats" as const, lang: "en" as const }
-    ]).flat()
+    { name: "bottomDamageText", ...BOTTOM_TEAM.damage, mode: "stats", lang: "en" }
   ];
 
-  const { regions: ocrRegions, engineDebug } = await readRegionsWithPaddleOCR(manifests, buffer);
+  const rowFallbackManifests: OcrRegionManifest[] = Array.from({ length: 5 }, (_, index) => [
+    { name: `topRow${index + 1}NameText`, ...buildRowRegion(TOP_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
+    { name: `topRow${index + 1}StatsText`, ...buildStatsRowRegion(TOP_TEAM, index), mode: "stats" as const, lang: "en" as const },
+    { name: `bottomRow${index + 1}NameText`, ...buildRowRegion(BOTTOM_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
+    { name: `bottomRow${index + 1}StatsText`, ...buildStatsRowRegion(BOTTOM_TEAM, index), mode: "stats" as const, lang: "en" as const }
+  ]).flat();
+
+  const { regions: baseRegions, engineDebug: baseEngineDebug } = await readRegionsWithPaddleOCR(baseManifests, buffer);
+  const ocrRegions = [...baseRegions];
   const ocrMap = new Map(ocrRegions.map((item) => [item.name, item]));
   const getText = (name: string) => ocrMap.get(name)?.text ?? "";
+
+  const topColumnInput = {
+    namesText: getText("topNamesText"),
+    killsText: getText("topKillsText"),
+    deathsText: getText("topDeathsText"),
+    assistsText: getText("topAssistsText"),
+    headshotText: getText("topHeadshotText"),
+    damageText: getText("topDamageText")
+  };
+  const bottomColumnInput = {
+    namesText: getText("bottomNamesText"),
+    killsText: getText("bottomKillsText"),
+    deathsText: getText("bottomDeathsText"),
+    assistsText: getText("bottomAssistsText"),
+    headshotText: getText("bottomHeadshotText"),
+    damageText: getText("bottomDamageText")
+  };
+
+  const shouldRunRowFallback =
+    (process.env.PADDLE_OCR_ENABLE_ROW_FALLBACK ?? "auto").toLowerCase() !== "0" &&
+    (process.env.PADDLE_OCR_ENABLE_ROW_FALLBACK ?? "auto").toLowerCase() !== "false" &&
+    (!hasEnoughColumnData(topColumnInput) || !hasEnoughColumnData(bottomColumnInput));
+
+  let rowEngineDebug = null;
+  if (shouldRunRowFallback) {
+    const { regions: rowRegions, engineDebug } = await readRegionsWithPaddleOCR(rowFallbackManifests, buffer);
+    rowEngineDebug = engineDebug;
+    for (const region of rowRegions) {
+      ocrRegions.push(region);
+      ocrMap.set(region.name, region);
+    }
+  }
 
   const scoreText = getText("scoreText");
   const topScoreText = getText("topScoreText");
@@ -834,20 +889,10 @@ export async function parseMatchScreenshot(buffer: Buffer) {
   const mapText = getText("mapText");
   const mapTextEng = getText("mapTextEng");
   const topTeamColumns = readTeamBlockFromTexts({
-    namesText: getText("topNamesText"),
-    killsText: getText("topKillsText"),
-    deathsText: getText("topDeathsText"),
-    assistsText: getText("topAssistsText"),
-    headshotText: getText("topHeadshotText"),
-    damageText: getText("topDamageText")
+    ...topColumnInput
   });
   const bottomTeamColumns = readTeamBlockFromTexts({
-    namesText: getText("bottomNamesText"),
-    killsText: getText("bottomKillsText"),
-    deathsText: getText("bottomDeathsText"),
-    assistsText: getText("bottomAssistsText"),
-    headshotText: getText("bottomHeadshotText"),
-    damageText: getText("bottomDamageText")
+    ...bottomColumnInput
   });
   const topTeamRows = readTeamByRowsFromTexts({
     rowNames: Array.from({ length: 5 }, (_, index) => getText(`topRow${index + 1}NameText`)),
@@ -937,7 +982,11 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     scoreB: finalScoreB,
     teams,
     diagnostics: {
-      engineDebug,
+      engineDebug: {
+        base: baseEngineDebug,
+        rowFallback: rowEngineDebug,
+        shouldRunRowFallback
+      },
       ocrTexts: Object.fromEntries(ocrRegions.map((region) => [region.name, region.text])),
       zones: ocrRegions.map((region) => ({
         name: region.name,

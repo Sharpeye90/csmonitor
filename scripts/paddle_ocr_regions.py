@@ -51,13 +51,32 @@ def upscale(image, factor):
 _OCRS = {}
 
 
+def env_int(name, default):
+    value = os.getenv(name)
+    if not value:
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def env_bool(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_ocr(lang):
     if lang not in _OCRS:
         _OCRS[lang] = PaddleOCR(
             lang=lang,
             device="cpu",
             enable_mkldnn=False,
-            cpu_threads=4,
+            cpu_threads=env_int("PADDLE_OCR_CPU_THREADS", 4),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -125,10 +144,10 @@ def preview_texts(ocr_result):
 
 
 def try_predict(ocr, payload):
-    attempts = [
-        lambda: ocr.predict(payload),
-        lambda: ocr.ocr(payload),
-    ]
+    fast_mode = env_bool("PADDLE_OCR_FAST_MODE", True)
+    attempts = [lambda: ocr.predict(payload)]
+    if not fast_mode:
+        attempts.append(lambda: ocr.ocr(payload))
 
     best_text = ""
     best_score = 0
@@ -179,6 +198,8 @@ def predict_text(ocr, images):
         best_source = None
         debug_attempts = []
 
+        fast_mode = env_bool("PADDLE_OCR_FAST_MODE", True)
+
         for source_name, image in images:
             text, source_attempts = try_predict(ocr, image)
             text_score = score_text(text)
@@ -194,20 +215,21 @@ def predict_text(ocr, images):
                 best_score = text_score
                 best_source = f"{source_name}:array"
 
-            cv2.imwrite(temp_path, image)
-            text, source_attempts = try_predict(ocr, temp_path)
-            text_score = score_text(text)
-            debug_attempts.append(
-                {
-                    "source": source_name,
-                    "input": "path",
-                    "attempts": source_attempts,
-                }
-            )
-            if text_score > best_score:
-                best_text = text
-                best_score = text_score
-                best_source = f"{source_name}:path"
+            if not fast_mode:
+                cv2.imwrite(temp_path, image)
+                text, source_attempts = try_predict(ocr, temp_path)
+                text_score = score_text(text)
+                debug_attempts.append(
+                    {
+                        "source": source_name,
+                        "input": "path",
+                        "attempts": source_attempts,
+                    }
+                )
+                if text_score > best_score:
+                    best_text = text
+                    best_score = text_score
+                    best_source = f"{source_name}:path"
 
         return best_text, {
             "bestSource": best_source,
@@ -241,8 +263,6 @@ def main():
     for region in regions:
         crop = crop_region(image, region)
         processed = preprocess(crop, region.get("mode", "names"))
-        enlarged_crop = upscale(crop, 2)
-        enlarged_processed = upscale(processed, 1.5)
         lang = region.get("lang", "ru")
         text = ""
         debug = {
@@ -250,17 +270,21 @@ def main():
             "lang": lang,
             "cropSize": [int(crop.shape[1]), int(crop.shape[0])],
             "processedSize": [int(processed.shape[1]), int(processed.shape[0])],
+            "fastMode": env_bool("PADDLE_OCR_FAST_MODE", True),
         }
         try:
             ocr = get_ocr(lang)
+            images = [("crop", crop)]
+            if region.get("mode", "names") == "stats":
+                images.append(("processed", processed))
+            elif region.get("mode", "names") == "map":
+                images.append(("processed", processed))
+            else:
+                images.append(("enlargedCrop", upscale(crop, 1.5)))
+
             text, ocr_debug = predict_text(
                 ocr,
-                [
-                    ("crop", crop),
-                    ("enlargedCrop", enlarged_crop),
-                    ("processed", processed),
-                    ("enlargedProcessed", enlarged_processed),
-                ],
+                images,
             )
             debug["ocr"] = ocr_debug
         except Exception as exc:
