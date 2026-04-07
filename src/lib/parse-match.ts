@@ -515,7 +515,7 @@ function pairTeamPlayers(
   }).filter((player) => player.nickname);
 }
 
-function parseScoreText(text: string) {
+function tryParseScoreText(text: string) {
   const direct = text.match(/(\d{1,2})\s*[-:]\s*(\d{1,2})/);
   if (direct) {
     return {
@@ -532,7 +532,7 @@ function parseScoreText(text: string) {
     };
   }
 
-  throw new Error("Не удалось распознать итоговый счет");
+  return null;
 }
 
 function parseMapName(text: string) {
@@ -794,11 +794,17 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     });
   }
 
-  const { scoreA, scoreB } = parseScoreText(scoreText);
+  const parsedBannerScore = tryParseScoreText(scoreText);
+  const bannerFallbackHigh = parsedBannerScore ? Math.max(parsedBannerScore.scoreA, parsedBannerScore.scoreB) : 13;
+  const bannerFallbackLow = parsedBannerScore ? Math.min(parsedBannerScore.scoreA, parsedBannerScore.scoreB) : 0;
   const sidebarScores = {
-    top: parseNumbers(topScoreText, 0, 13)[0] ?? Math.min(scoreA, scoreB),
-    bottom: parseNumbers(bottomScoreText, 0, 13)[0] ?? Math.max(scoreA, scoreB)
+    top: parseNumbers(topScoreText, 0, 13)[0] ?? bannerFallbackLow,
+    bottom: parseNumbers(bottomScoreText, 0, 13)[0] ?? bannerFallbackHigh
   };
+  const fallbackHigh = Math.max(sidebarScores.top, sidebarScores.bottom);
+  const fallbackLow = Math.min(sidebarScores.top, sidebarScores.bottom);
+  const bannerHigh = parsedBannerScore ? Math.max(parsedBannerScore.scoreA, parsedBannerScore.scoreB) : fallbackHigh;
+  const bannerLow = parsedBannerScore ? Math.min(parsedBannerScore.scoreA, parsedBannerScore.scoreB) : fallbackLow;
 
   const teams: ParsedTeam[] = [
     {
@@ -815,8 +821,8 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     }
   ];
 
-  const finalScoreA = Math.max(sidebarScores.top, sidebarScores.bottom);
-  const finalScoreB = Math.min(sidebarScores.top, sidebarScores.bottom);
+  const finalScoreA = fallbackHigh || bannerHigh;
+  const finalScoreB = fallbackLow || bannerLow;
 
   return {
     mapName: parseMapName(`${mapText}\n${mapTextEng}`),
