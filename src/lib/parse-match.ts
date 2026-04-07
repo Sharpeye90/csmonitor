@@ -61,8 +61,23 @@ const KNOWN_PLAYERS = [
   "cr01ik"
 ] as const;
 
+const FORCED_PLAYER_ALIASES: Array<{ pattern: RegExp; canonical: string }> = [
+  { pattern: /c#hooh|#hooh|эф c#hooh|e#to#/i, canonical: "TDW @#TO#" },
+  { pattern: /aephako77|aernako77|alphako77|alpha.?k077/i, canonical: "TDW ALPHAK077" },
+  { pattern: /dioioioi|oioioioi|0ioioioi/i, canonical: "TDW Oioioioi" },
+  { pattern: /paradox[\s_]*net/i, canonical: "TDW paradox_net" },
+  { pattern: /rabotnik[\s_]*mida/i, canonical: "TDW Rabotnik_MiDa TDW" },
+  { pattern: /bb1|567/i, canonical: "TDW bb1" },
+  { pattern: /morrgot|ewes/i, canonical: "TDW Morrgot" },
+  { pattern: /kenpar[kt]|es ss es/i, canonical: "TDW KenPark" },
+  { pattern: /отец андрей|ees fees/i, canonical: "TDW Отец Андрей" },
+  { pattern: /a le es|aixx/i, canonical: "TDW AIXX" }
+];
+
 const SCORE_REGION: Region = { left: 0.405, top: 0.015, width: 0.17, height: 0.07 };
-const MAP_REGION: Region = { left: 0.11, top: 0.31, width: 0.24, height: 0.06 };
+const TOP_SCORE_REGION: Region = { left: 0.015, top: 0.37, width: 0.09, height: 0.16 };
+const BOTTOM_SCORE_REGION: Region = { left: 0.015, top: 0.67, width: 0.09, height: 0.16 };
+const MAP_REGION: Region = { left: 0.04, top: 0.28, width: 0.30, height: 0.08 };
 
 const TOP_TEAM: TeamBlock = {
   names: { left: 0.25, top: 0.42, width: 0.34, height: 0.19 },
@@ -296,6 +311,14 @@ function levenshtein(a: string, b: string) {
 
 function normalizePlayerName(rawName: string) {
   const cleaned = cleanupName(rawName);
+  const cleanedNormalized = canonicalizeForMatch(cleaned);
+
+  for (const alias of FORCED_PLAYER_ALIASES) {
+    if (alias.pattern.test(cleaned) || alias.pattern.test(cleanedNormalized)) {
+      return alias.canonical;
+    }
+  }
+
   const normalized = canonicalizeForMatch(cleaned);
 
   if (!normalized) {
@@ -377,6 +400,31 @@ function parseNumbers(text: string, min: number, max: number) {
     .filter((value) => value >= min && value <= max);
 }
 
+function buildRowRegion(region: Region, index: number, rows = 5): Region {
+  const rowHeight = region.height / rows;
+  const verticalInset = rowHeight * 0.08;
+
+  return {
+    left: region.left,
+    top: region.top + rowHeight * index + verticalInset,
+    width: region.width,
+    height: rowHeight - verticalInset * 2
+  };
+}
+
+function buildStatsRowRegion(block: TeamBlock, index: number, rows = 5): Region {
+  return buildRowRegion(
+    {
+      left: block.kills.left,
+      top: block.kills.top,
+      width: block.damage.left + block.damage.width - block.kills.left,
+      height: block.kills.height
+    },
+    index,
+    rows
+  );
+}
+
 function alignColumn(numbers: number[], expected: number) {
   const sliced = numbers.slice(0, expected);
   if (sliced.length < expected) {
@@ -433,12 +481,12 @@ function parseScoreText(text: string) {
   const direct = text.match(/(\d{1,2})\s*[-:]\s*(\d{1,2})/);
   if (direct) {
     return {
-      scoreA: Number(direct[1]),
-      scoreB: Number(direct[2])
+      scoreA: Math.min(13, Number(direct[1])),
+      scoreB: Math.min(13, Number(direct[2]))
     };
   }
 
-  const values = parseNumbers(text, 0, 30);
+  const values = parseNumbers(text, 0, 13);
   if (values.length >= 2) {
     return {
       scoreA: values[0],
@@ -455,6 +503,16 @@ function parseMapName(text: string) {
   for (const map of KNOWN_MAPS) {
     if (map.aliases.some((alias) => normalized.includes(alias))) {
       return map.canonical;
+    }
+  }
+
+  const compact = normalized.replace(/[^a-z]/g, "");
+  for (const map of KNOWN_MAPS) {
+    for (const alias of map.aliases) {
+      const aliasCompact = alias.replace(/[^a-z]/g, "");
+      if (compact.includes(aliasCompact) || levenshtein(compact, aliasCompact) <= 3) {
+        return map.canonical;
+      }
     }
   }
 
@@ -498,6 +556,88 @@ async function readTeamBlock(buffer: Buffer, block: TeamBlock) {
   };
 }
 
+function parseStatsRow(text: string) {
+  const values = parseNumbers(text, 0, 5000);
+
+  if (values.length >= 5) {
+    const slice = values.slice(-5);
+    return {
+      kills: slice[0],
+      deaths: slice[1],
+      assists: slice[2],
+      headshotPct: slice[3],
+      damage: slice[4]
+    };
+  }
+
+  return null;
+}
+
+function repairDamage(value: number) {
+  if (value >= 1000) {
+    return value;
+  }
+
+  if (value >= 900) {
+    return value + 1000;
+  }
+
+  if (value > 0) {
+    return value + 1000;
+  }
+
+  return value;
+}
+
+async function readTeamByRows(buffer: Buffer, block: TeamBlock) {
+  const rows = await Promise.all(
+    Array.from({ length: 5 }, async (_, index) => {
+      const [nameText, statsText] = await Promise.all([
+        readRegionText(buffer, buildRowRegion(block.names, index), "names", [{ psm: 7 }, { psm: 6 }]),
+        readRegionText(buffer, buildStatsRowRegion(block, index), "stats", [
+          { psm: 7, whitelist: "0123456789 " },
+          { psm: 6, whitelist: "0123456789 " }
+        ])
+      ]);
+
+      const parsedName = parseNameLines(nameText)[0] ?? normalizePlayerName(nameText);
+      const parsedStats = parseStatsRow(statsText);
+
+      return {
+        nameText,
+        statsText,
+        parsedName,
+        parsedStats
+      };
+    })
+  );
+
+  const players = rows
+    .map((row) => {
+      const stats = row.parsedStats;
+      return {
+        nickname: row.parsedName,
+        kills: stats?.kills ?? 0,
+        deaths: stats?.deaths ?? 0,
+        assists: stats?.assists ?? null,
+        headshotPct: stats?.headshotPct ?? 0,
+        damage: repairDamage(stats?.damage ?? 0),
+        kda: stats ? (stats.deaths === 0 ? stats.kills : Math.round((stats.kills / stats.deaths) * 100) / 100) : 0
+      } satisfies ParsedPlayer;
+    })
+    .filter((player) => player.nickname);
+
+  return {
+    players,
+    debug: Object.fromEntries(
+      rows.flatMap((row, index) => [
+        [`row${index + 1}NameText`, row.nameText],
+        [`row${index + 1}StatsText`, row.statsText]
+      ])
+    )
+  };
+}
+
 export async function parseMatchScreenshot(buffer: Buffer) {
   const metadata = await sharp(buffer).metadata();
 
@@ -505,57 +645,85 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     throw new Error("Не удалось определить размеры изображения");
   }
 
-  const [scoreText, mapText, topTeam, bottomTeam] = await Promise.all([
+  const [scoreText, topScoreText, bottomScoreText, mapText, topTeamRows, bottomTeamRows, topTeamColumns, bottomTeamColumns] = await Promise.all([
     readRegionText(buffer, SCORE_REGION, "score", [
       { psm: 7, whitelist: "0123456789:-" },
       { psm: 6, whitelist: "0123456789:-" }
     ]),
+    readRegionText(buffer, TOP_SCORE_REGION, "score", [
+      { psm: 10, whitelist: "0123456789" },
+      { psm: 7, whitelist: "0123456789" }
+    ]),
+    readRegionText(buffer, BOTTOM_SCORE_REGION, "score", [
+      { psm: 10, whitelist: "0123456789" },
+      { psm: 7, whitelist: "0123456789" }
+    ]),
     readRegionText(buffer, MAP_REGION, "map", [{ psm: 6 }]),
+    readTeamByRows(buffer, TOP_TEAM),
+    readTeamByRows(buffer, BOTTOM_TEAM),
     readTeamBlock(buffer, TOP_TEAM),
     readTeamBlock(buffer, BOTTOM_TEAM)
   ]);
 
-  if (!topTeam.players.length || !bottomTeam.players.length) {
+  const topPlayers = topTeamRows.players.length === 5 ? topTeamRows.players : topTeamColumns.players;
+  const bottomPlayers = bottomTeamRows.players.length === 5 ? bottomTeamRows.players : bottomTeamColumns.players;
+
+  if (!topPlayers.length || !bottomPlayers.length) {
     throw buildError({
       scoreText,
+      topScoreText,
+      bottomScoreText,
       mapText,
-      topNamesText: topTeam.debug.namesText,
-      topKillsText: topTeam.debug.killsText,
-      topDeathsText: topTeam.debug.deathsText,
-      topAssistsText: topTeam.debug.assistsText,
-      topHeadshotText: topTeam.debug.headshotText,
-      topDamageText: topTeam.debug.damageText,
-      bottomNamesText: bottomTeam.debug.namesText,
-      bottomKillsText: bottomTeam.debug.killsText,
-      bottomDeathsText: bottomTeam.debug.deathsText,
-      bottomAssistsText: bottomTeam.debug.assistsText,
-      bottomHeadshotText: bottomTeam.debug.headshotText,
-      bottomDamageText: bottomTeam.debug.damageText
+      topNamesText: topTeamColumns.debug.namesText,
+      topKillsText: topTeamColumns.debug.killsText,
+      topDeathsText: topTeamColumns.debug.deathsText,
+      topAssistsText: topTeamColumns.debug.assistsText,
+      topHeadshotText: topTeamColumns.debug.headshotText,
+      topDamageText: topTeamColumns.debug.damageText,
+      bottomNamesText: bottomTeamColumns.debug.namesText,
+      bottomKillsText: bottomTeamColumns.debug.killsText,
+      bottomDeathsText: bottomTeamColumns.debug.deathsText,
+      bottomAssistsText: bottomTeamColumns.debug.assistsText,
+      bottomHeadshotText: bottomTeamColumns.debug.headshotText,
+      bottomDamageText: bottomTeamColumns.debug.damageText,
+      ...Object.fromEntries(
+        Object.entries(topTeamRows.debug).map(([key, value]) => [`top${key}`, value])
+      ),
+      ...Object.fromEntries(
+        Object.entries(bottomTeamRows.debug).map(([key, value]) => [`bottom${key}`, value])
+      )
     });
   }
 
   const { scoreA, scoreB } = parseScoreText(scoreText);
+  const sidebarScores = {
+    top: parseNumbers(topScoreText, 0, 13)[0] ?? Math.min(scoreA, scoreB),
+    bottom: parseNumbers(bottomScoreText, 0, 13)[0] ?? Math.max(scoreA, scoreB)
+  };
 
   const teams: ParsedTeam[] = [
     {
       name: "Спецназ",
       side: "CT",
-      score: scoreA,
-      players: topTeam.players
+      score: sidebarScores.top,
+      players: topPlayers
     },
     {
       name: "Террористы",
       side: "T",
-      score: scoreB,
-      players: bottomTeam.players
+      score: sidebarScores.bottom,
+      players: bottomPlayers
     }
   ];
 
+  const finalScoreA = Math.max(sidebarScores.top, sidebarScores.bottom);
+  const finalScoreB = Math.min(sidebarScores.top, sidebarScores.bottom);
+
   return {
     mapName: parseMapName(mapText),
-    score: `${scoreA}-${scoreB}`,
-    scoreA,
-    scoreB,
+    score: `${finalScoreA}-${finalScoreB}`,
+    scoreA: finalScoreA,
+    scoreB: finalScoreB,
     teams
   };
 }
