@@ -41,6 +41,10 @@ input {
   font: inherit;
 }
 
+select {
+  font: inherit;
+}
+
 .page-shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
@@ -137,6 +141,17 @@ input {
   border: 1px dashed rgba(125, 249, 199, 0.35);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+}
+
+.upload-form input[type="text"],
+.upload-form input[type="date"],
+.upload-form select {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
 }
 

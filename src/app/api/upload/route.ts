@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { formatRuDate, resolvePlayedOn } from "@/lib/date";
 import { parseMatchScreenshot } from "@/lib/parse-match";
+import { resolveSeasonForMatch } from "@/lib/seasons";
 
 export const runtime = "nodejs";
 
@@ -10,24 +11,26 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("screenshot");
+    const seasonId = formData.get("seasonId");
 
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Файл скриншота не передан", match: null }, { status: 400 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const base64Image = buffer.toString("base64");
     const uploadedAt = new Date();
     const timeZone = process.env.APP_TIMEZONE || "Europe/Moscow";
     const playedOn = resolvePlayedOn(uploadedAt, timeZone);
-
-    const parsed = await parseMatchScreenshot({
-      mimeType: file.type || "image/jpeg",
-      base64Image
+    const season = await resolveSeasonForMatch({
+      seasonId: typeof seasonId === "string" && seasonId ? seasonId : null,
+      playedOn
     });
+
+    const parsed = await parseMatchScreenshot(buffer);
 
     const saved = await prisma.match.create({
       data: {
+        seasonId: season?.id ?? null,
         uploadedAt,
         playedOn,
         mapName: parsed.mapName,
@@ -53,6 +56,7 @@ export async function POST(request: Request) {
         }
       },
       include: {
+        season: true,
         teams: {
           include: {
             players: {
@@ -77,6 +81,14 @@ export async function POST(request: Request) {
         mapName: saved.mapName,
         scoreA: saved.scoreA,
         scoreB: saved.scoreB,
+        season: saved.season
+          ? {
+              id: saved.season.id,
+              name: saved.season.name,
+              startDate: saved.season.startDate.toISOString(),
+              endDate: saved.season.endDate.toISOString()
+            }
+          : null,
         teams: saved.teams.map((team) => ({
           name: team.name,
           side: team.side,

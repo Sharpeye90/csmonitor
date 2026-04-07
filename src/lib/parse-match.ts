@@ -1,181 +1,192 @@
-import OpenAI from "openai";
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 import type { ParsedPlayer, ParsedTeam } from "@/lib/types";
 
-type VisionPlayer = {
-  nickname: string;
-  kills: number;
-  deaths: number;
-  assists: number;
-  damage: number;
-  headshotPct: number;
-};
+const execFileAsync = promisify(execFile);
 
-type VisionTeam = {
-  name: string;
-  side: string;
-  score: number;
-  players: VisionPlayer[];
-};
+const KNOWN_MAPS = [
+  { canonical: "Dust II", aliases: ["dust ii", "dust 2", "dustii"] },
+  { canonical: "Mirage", aliases: ["mirage"] },
+  { canonical: "Inferno", aliases: ["inferno"] },
+  { canonical: "Nuke", aliases: ["nuke"] },
+  { canonical: "Ancient", aliases: ["ancient"] },
+  { canonical: "Anubis", aliases: ["anubis"] },
+  { canonical: "Train", aliases: ["train"] },
+  { canonical: "Vertigo", aliases: ["vertigo"] },
+  { canonical: "Overpass", aliases: ["overpass"] }
+];
 
-type VisionMatch = {
-  mapName: string;
-  score: string;
-  teams: VisionTeam[];
-};
+function normalizeText(input: string) {
+  return input
+    .replace(/[|]/g, " ")
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/[—–]/g, "-")
+    .replace(/[^\S\r\n]+/g, " ");
+}
 
-const responseSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["mapName", "score", "teams"],
-  properties: {
-    mapName: { type: "string" },
-    score: {
-      type: "string",
-      description: "Final score in format A-B, for example 13-2"
-    },
-    teams: {
-      type: "array",
-      minItems: 2,
-      maxItems: 2,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["name", "side", "score", "players"],
-        properties: {
-          name: { type: "string" },
-          side: { type: "string" },
-          score: { type: "integer" },
-          players: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["nickname", "kills", "deaths", "assists", "damage", "headshotPct"],
-              properties: {
-                nickname: { type: "string" },
-                kills: { type: "integer" },
-                deaths: { type: "integer" },
-                assists: { type: "integer" },
-                damage: { type: "integer" },
-                headshotPct: { type: "number" }
-              }
-            }
-          }
-        }
-      }
+function cleanNickname(raw: string) {
+  return raw
+    .replace(/^\s*\d{1,3}\s+/g, "")
+    .replace(/^\s*[\W_]+/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function findMapName(text: string) {
+  const normalized = text.toLowerCase();
+
+  for (const map of KNOWN_MAPS) {
+    if (map.aliases.some((alias) => normalized.includes(alias))) {
+      return map.canonical;
     }
   }
-} as const;
 
-function normalizePlayer(player: {
-  nickname: string;
-  kills: number;
-  deaths: number;
-  assists: number;
-  damage: number;
-  headshotPct: number;
-}): ParsedPlayer {
-  const kills = Number(player.kills) || 0;
-  const deaths = Number(player.deaths) || 0;
+  const previewModeMap = normalized.match(/(?:premier|премьер)[^\n]*?([a-z]+(?:\s*(?:ii|2))?)/i);
+  if (previewModeMap?.[1]) {
+    return previewModeMap[1].trim();
+  }
+
+  return "Unknown";
+}
+
+function parseScoreFromText(text: string) {
+  const matches = Array.from(text.matchAll(/(\d{1,2})\s*[-:]\s*(\d{1,2})/g));
+  const candidates = matches
+    .map((match) => ({
+      scoreA: Number(match[1]),
+      scoreB: Number(match[2])
+    }))
+    .filter((item) => item.scoreA <= 30 && item.scoreB <= 30);
+
+  if (!candidates.length) {
+    throw new Error("Не удалось распознать итоговый счет на скриншоте");
+  }
+
+  return candidates.sort((left, right) => right.scoreA + right.scoreB - (left.scoreA + left.scoreB))[0];
+}
+
+function parsePlayerLine(line: string): ParsedPlayer | null {
+  const normalized = line.replace(/[^\S\r\n]+/g, " ").trim();
+  const match = normalized.match(/^(.*?)(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,3})\s+(\d{2,5})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const nickname = cleanNickname(match[1]);
+  const kills = Number(match[2]);
+  const deaths = Number(match[3]);
+  const assists = Number(match[4]);
+  const headshotPct = Number(match[5]);
+  const damage = Number(match[6]);
+
+  if (!nickname || damage < 100 || kills > 60 || deaths > 60) {
+    return null;
+  }
 
   return {
-    nickname: player.nickname.trim(),
+    nickname,
     kills,
     deaths,
-    assists: Number.isFinite(player.assists) ? Number(player.assists) : null,
-    damage: Number(player.damage) || 0,
-    headshotPct: Number(player.headshotPct) || 0,
+    assists,
+    damage,
+    headshotPct,
     kda: `${kills}/${deaths}`
   };
 }
 
-function normalizeTeams(teams: VisionTeam[], scoreA: number, scoreB: number): ParsedTeam[] {
-  return teams.slice(0, 2).map((team, index) => ({
-    name: team.name?.trim() || (index === 0 ? "Team A" : "Team B"),
-    side: team.side?.trim() || (index === 0 ? "UNKNOWN" : "UNKNOWN"),
-    score: Number.isFinite(team.score) ? Number(team.score) : index === 0 ? scoreA : scoreB,
-    players: (team.players ?? []).map(normalizePlayer)
-  }));
-}
+function parsePlayers(lines: string[]) {
+  const players = lines
+    .map(parsePlayerLine)
+    .filter((player): player is ParsedPlayer => player !== null);
 
-export function parseScore(score: string) {
-  const match = score.match(/(\d+)\s*[-:]\s*(\d+)/);
-
-  if (!match) {
-    throw new Error(`Не удалось разобрать счет: ${score}`);
+  if (players.length < 2) {
+    throw new Error("Не удалось распознать строки игроков. Проверьте качество скриншота.");
   }
 
-  return {
-    scoreA: Number(match[1]),
-    scoreB: Number(match[2])
-  };
+  const midpoint = Math.ceil(players.length / 2);
+  const topPlayers = players.slice(0, midpoint);
+  const bottomPlayers = players.slice(midpoint);
+
+  return { topPlayers, bottomPlayers };
 }
 
-export async function parseMatchScreenshot(input: { mimeType: string; base64Image: string }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY не задан");
-  }
-
-  const client = new OpenAI({ apiKey });
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-
-  const response = await client.responses.create({
-    model,
-    input: [
-      {
-        role: "system",
-        content: [
-          {
-            type: "input_text",
-            text: [
-              "You extract CS2 match statistics from a scoreboard screenshot.",
-              "Return only the visible final match data.",
-              "Map name must be plain text such as Dust II or Mirage.",
-              "Score must be final match score in A-B format.",
-              "Create exactly two teams, ordered from the upper scoreboard block to the lower one.",
-              "If a team name is not shown, use CT for counter-terrorists and T for terrorists.",
-              "Players must belong to the correct team.",
-              "Headshot percentage comes from the %HS column.",
-              "Assists are taken from the assists column if visible; otherwise return 0.",
-              "Do not invent players that are not visible."
-            ].join(" ")
-          }
-        ]
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "Parse this CS2 screenshot into structured JSON."
-          },
-          {
-            type: "input_image",
-            image_url: `data:${input.mimeType};base64,${input.base64Image}`,
-            detail: "auto"
-          }
-        ]
-      }
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "cs2_match_parse",
-        schema: responseSchema
-      }
+function buildTeams(players: { topPlayers: ParsedPlayer[]; bottomPlayers: ParsedPlayer[] }, scoreA: number, scoreB: number): ParsedTeam[] {
+  return [
+    {
+      name: "Спецназ",
+      side: "CT",
+      score: scoreA,
+      players: players.topPlayers
+    },
+    {
+      name: "Террористы",
+      side: "T",
+      score: scoreB,
+      players: players.bottomPlayers
     }
-  });
+  ];
+}
 
-  const parsed = JSON.parse(response.output_text) as VisionMatch;
-  const { scoreA, scoreB } = parseScore(parsed.score);
+async function runTesseract(buffer: Buffer) {
+  const tesseractBin = process.env.TESSERACT_BIN || "tesseract";
+  const ocrLang = process.env.OCR_LANG || "eng+rus";
+  const tempPath = join(tmpdir(), `${randomUUID()}.png`);
+
+  await writeFile(tempPath, buffer);
+
+  try {
+    const { stdout, stderr } = await execFileAsync(tesseractBin, [
+      tempPath,
+      "stdout",
+      "-l",
+      ocrLang,
+      "--psm",
+      "6"
+    ]);
+
+    const text = normalizeText(stdout);
+
+    if (!text.trim()) {
+      throw new Error(stderr || "tesseract не вернул текст");
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(
+        `Локальный OCR не сработал. Убедитесь, что установлен tesseract и языки ${ocrLang}. ${error.message}`
+      );
+    }
+
+    throw error;
+  } finally {
+    await unlink(tempPath).catch(() => undefined);
+  }
+}
+
+export async function parseMatchScreenshot(buffer: Buffer) {
+  const text = await runTesseract(buffer);
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const { scoreA, scoreB } = parseScoreFromText(text);
+  const mapName = findMapName(text);
+  const players = parsePlayers(lines);
 
   return {
-    ...parsed,
-    teams: normalizeTeams(parsed.teams, scoreA, scoreB),
+    mapName,
+    score: `${scoreA}-${scoreB}`,
     scoreA,
-    scoreB
+    scoreB,
+    teams: buildTeams(players, scoreA, scoreB)
   };
 }

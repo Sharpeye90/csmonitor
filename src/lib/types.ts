@@ -21,6 +21,13 @@ export type ParsedMatch = {
   teams: ParsedTeam[];
 };
 
+export type SeasonSummary = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+};
+
 export type SavedMatch = {
   id: string;
   uploadedAt: string;
@@ -28,5 +35,6 @@ export type SavedMatch = {
   mapName: string;
   scoreA: number;
   scoreB: number;
+  season: SeasonSummary | null;
   teams: ParsedTeam[];
 };

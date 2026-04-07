@@ -9,6 +9,7 @@ datasource db {
 
 model Match {
   id         String       @id @default(cuid())
+  seasonId   String?
   uploadedAt DateTime
   playedOn   DateTime
   mapName    String
@@ -16,10 +17,24 @@ model Match {
   scoreB     Int
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
+  season     Season?      @relation(fields: [seasonId], references: [id], onDelete: SetNull)
   teams      Team[]
 
+  @@index([seasonId])
   @@index([playedOn])
   @@index([mapName])
+}
+
+model Season {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  matches   Match[]
+
+  @@index([startDate, endDate])
 }
 
 model Team {

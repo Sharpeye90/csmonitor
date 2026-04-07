@@ -1,15 +1,17 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import type { SavedMatch } from "@/lib/types";
+import type { SavedMatch, SeasonSummary } from "@/lib/types";
 
 type UploadState = {
   error: string | null;
   match: SavedMatch | null;
 };
 
-export function UploadForm() {
+export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
+  const router = useRouter();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [state, setState] = useState<UploadState>({ error: null, match: null });
   const [isPending, startTransition] = useTransition();
@@ -28,6 +30,7 @@ export function UploadForm() {
     }
 
     setState(payload);
+    router.refresh();
   }
 
   return (
@@ -68,6 +71,17 @@ export function UploadForm() {
             }}
           />
         </label>
+        <label>
+          Сезон
+          <select name="seasonId" defaultValue="">
+            <option value="">Определить автоматически по дате матча</option>
+            {seasons.map((season) => (
+              <option key={season.id} value={season.id}>
+                {season.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="submit" disabled={isPending}>
           {isPending ? "Обрабатываем..." : "Распознать и сохранить"}
         </button>
@@ -82,6 +96,9 @@ export function UploadForm() {
               <h3>{parsedMatch.mapName}</h3>
               <p className="muted" style={{ marginBottom: 0 }}>
                 Дата матча: {parsedMatch.playedOn}
+              </p>
+              <p className="muted" style={{ marginBottom: 0 }}>
+                Сезон: {parsedMatch.season?.name ?? "не назначен"}
               </p>
             </div>
             <span className="score-chip">

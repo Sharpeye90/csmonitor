@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { formatRuDate } from "@/lib/date";
+import { SeasonForm } from "@/app/components/season-form";
 import { UploadForm } from "@/app/components/upload-form";
 
 const timeZone = process.env.APP_TIMEZONE || "Europe/Moscow";
@@ -13,6 +14,7 @@ async function getMatches() {
       },
       take: 10,
       include: {
+        season: true,
         teams: {
           orderBy: {
             createdAt: "asc"
@@ -32,8 +34,20 @@ async function getMatches() {
   }
 }
 
+async function getSeasons() {
+  try {
+    return await prisma.season.findMany({
+      orderBy: {
+        startDate: "desc"
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
 export default async function HomePage() {
-  const matches = await getMatches();
+  const [matches, seasons] = await Promise.all([getMatches(), getSeasons()]);
 
   return (
     <main className="page-shell">
@@ -56,13 +70,20 @@ export default async function HomePage() {
               <span>на каждый матч</span>
             </div>
             <div className="stat-box">
-              <strong>OCR + Vision</strong>
-              <span>серверный разбор скриншота</span>
+              <strong>Local OCR</strong>
+              <span>парсинг внутри сервиса</span>
             </div>
           </div>
         </div>
 
-        <UploadForm />
+        <UploadForm
+          seasons={seasons.map((season) => ({
+            id: season.id,
+            name: season.name,
+            startDate: season.startDate.toISOString(),
+            endDate: season.endDate.toISOString()
+          }))}
+        />
       </section>
 
       <section className="content-grid">
@@ -77,6 +98,9 @@ export default async function HomePage() {
                       <h3>{match.mapName}</h3>
                       <p className="muted" style={{ marginBottom: 0 }}>
                         Дата матча: {formatRuDate(match.playedOn, timeZone)}
+                      </p>
+                      <p className="muted" style={{ marginBottom: 0 }}>
+                        Сезон: {match.season?.name ?? "не назначен"}
                       </p>
                     </div>
                     <span className="score-chip">
@@ -142,19 +166,41 @@ export default async function HomePage() {
               </p>
             </div>
             <div className="match-card">
+              <h3>Сезоны</h3>
+              <p className="muted">
+                Можно создать сезоны с диапазоном дат, а затем либо выбирать сезон вручную при загрузке,
+                либо позволить приложению автоматически определить сезон по дате матча.
+              </p>
+            </div>
+            <div className="match-card">
               <h3>Структура матча</h3>
               <p className="muted">
                 Сохраняются карта, итоговый счет, две команды и игроки с убийствами, смертями, уроном,
                 %ГЛ и строковым KDA в формате Убийства/Смерти.
               </p>
             </div>
-            <div className="match-card">
-              <h3>Облачный запуск</h3>
-              <p className="muted">
-                Проект готов под PostgreSQL в облаке и деплой на Vercel, Railway или Fly.io через
-                `DATABASE_URL` и `OPENAI_API_KEY`.
-              </p>
-            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="content-grid">
+        <SeasonForm />
+
+        <div className="panel">
+          <h2 className="section-title">Сезоны</h2>
+          <div className="match-list">
+            {seasons.length ? (
+              seasons.map((season) => (
+                <div key={season.id} className="match-card">
+                  <h3>{season.name}</h3>
+                  <p className="muted">
+                    {formatRuDate(season.startDate, timeZone)} - {formatRuDate(season.endDate, timeZone)}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="muted">Сезоны пока не созданы.</p>
+            )}
           </div>
         </div>
       </section>
