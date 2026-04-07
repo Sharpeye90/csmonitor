@@ -44,6 +44,10 @@ def preprocess(image, mode):
     return cv2.cvtColor(cv2.GaussianBlur(scaled, (3, 3), 0), cv2.COLOR_GRAY2BGR)
 
 
+def upscale(image, factor):
+    return cv2.resize(image, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
+
+
 _OCRS = {}
 
 
@@ -102,37 +106,63 @@ def extract_text(ocr_result):
     return "\n".join([text for text in texts if text]).strip()
 
 
-def predict_text(ocr, processed):
-    try:
-        prediction = ocr.predict(processed)
-        text = extract_text(prediction)
-        if text:
-            return text
-    except Exception:
-        pass
+def score_text(text):
+    if not text:
+        return 0
 
+    compact = "".join(text.split())
+    alnum = sum(1 for char in compact if char.isalnum())
+    lines = len([line for line in text.splitlines() if line.strip()])
+    return len(compact) + alnum * 2 + lines * 4
+
+
+def try_predict(ocr, payload):
+    attempts = [
+        lambda: ocr.predict(payload),
+        lambda: ocr.ocr(payload),
+    ]
+
+    best_text = ""
+    best_score = 0
+
+    for attempt in attempts:
+        try:
+            prediction = attempt()
+            text = extract_text(prediction)
+            text_score = score_text(text)
+            if text_score > best_score:
+                best_text = text
+                best_score = text_score
+        except TypeError:
+            continue
+        except Exception:
+            continue
+
+    return best_text
+
+
+def predict_text(ocr, images):
     fd, temp_path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     try:
-        cv2.imwrite(temp_path, processed)
-        attempts = [
-            lambda: ocr.predict(temp_path),
-            lambda: ocr.ocr(temp_path),
-            lambda: ocr.ocr(processed),
-        ]
+        best_text = ""
+        best_score = 0
 
-        for attempt in attempts:
-            try:
-                prediction = attempt()
-                text = extract_text(prediction)
-                if text:
-                    return text
-            except TypeError:
-                continue
-            except Exception:
-                continue
+        for image in images:
+            text = try_predict(ocr, image)
+            text_score = score_text(text)
+            if text_score > best_score:
+                best_text = text
+                best_score = text_score
 
-        return ""
+            cv2.imwrite(temp_path, image)
+            text = try_predict(ocr, temp_path)
+            text_score = score_text(text)
+            if text_score > best_score:
+                best_text = text
+                best_score = text_score
+
+        return best_text
     finally:
         try:
             os.unlink(temp_path)
@@ -160,11 +190,13 @@ def main():
     for region in regions:
         crop = crop_region(image, region)
         processed = preprocess(crop, region.get("mode", "names"))
+        enlarged_crop = upscale(crop, 2)
+        enlarged_processed = upscale(processed, 1.5)
         lang = region.get("lang", "ru")
         text = ""
         try:
             ocr = get_ocr(lang)
-            text = predict_text(ocr, processed)
+            text = predict_text(ocr, [crop, enlarged_crop, processed, enlarged_processed])
         except Exception as exc:
             text = f"__OCR_ERROR__ {exc}"
 
