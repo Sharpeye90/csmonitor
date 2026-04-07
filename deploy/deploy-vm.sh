@@ -5,6 +5,7 @@ set -euo pipefail
 APP_NAME="${APP_NAME:-cs2-parser}"
 APP_USER="${APP_USER:-$USER}"
 APP_DIR="${APP_DIR:-/var/www/cs2-parser}"
+APP_HOST="${APP_HOST:-}"
 PORT="${PORT:-3000}"
 DOMAIN="${DOMAIN:-_}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
@@ -96,7 +97,7 @@ WorkingDirectory=${APP_DIR}
 Environment=NODE_ENV=production
 Environment=PORT=${PORT}
 EnvironmentFile=${APP_DIR}/.env
-ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port ${PORT}
+ExecStart=/usr/bin/npm run start -- --hostname ${APP_HOST} --port ${PORT}
 Restart=always
 RestartSec=5
 
@@ -123,7 +124,7 @@ server {
     client_max_body_size 20M;
 
     location / {
-        proxy_pass http://127.0.0.1:${PORT};
+        proxy_pass http://${APP_HOST}:${PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -152,18 +153,24 @@ print_summary() {
   log "Деплой завершен"
   echo "Приложение: ${APP_NAME}"
   echo "Каталог: ${APP_DIR}"
+  echo "Host: ${APP_HOST}"
   echo "Порт: ${PORT}"
   echo "Домен/IP: ${DOMAIN}"
   echo
   echo "Проверки:"
   echo "  sudo systemctl status ${APP_NAME}"
   echo "  sudo journalctl -u ${APP_NAME} -n 100 --no-pager"
-  echo "  curl -I http://127.0.0.1:${PORT}"
+  echo "  curl -I http://${APP_HOST}:${PORT}"
 }
 
 main() {
   require_command sudo
   require_command bash
+
+  if [[ -z "${APP_HOST}" ]]; then
+    echo "Переменная APP_HOST обязательна. Пример: APP_HOST=10.10.10.10" >&2
+    exit 1
+  fi
 
   install_system_packages
   prepare_app_dir

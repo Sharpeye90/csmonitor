@@ -106,9 +106,16 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Внутренняя ошибка сервера";
+    const details =
+      error && typeof error === "object" && "details" in error
+        ? (error as { details?: Record<string, string> }).details ?? null
+        : null;
+
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Внутренняя ошибка сервера",
+        error: message,
+        details,
         match: null
       },
       { status: 500 }

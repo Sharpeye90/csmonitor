@@ -7,6 +7,7 @@ import type { SavedMatch, SeasonSummary } from "@/lib/types";
 
 type UploadState = {
   error: string | null;
+  details?: Record<string, string> | null;
   match: SavedMatch | null;
 };
 
@@ -26,7 +27,11 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
     const payload = (await response.json()) as UploadState;
 
     if (!response.ok) {
-      throw new Error(payload.error || "Не удалось обработать скриншот");
+      const error = new Error(payload.error || "Не удалось обработать скриншот") as Error & {
+        details?: Record<string, string> | null;
+      };
+      error.details = payload.details ?? null;
+      throw error;
     }
 
     setState(payload);
@@ -46,6 +51,10 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
             } catch (error) {
               setState({
                 error: error instanceof Error ? error.message : "Неизвестная ошибка",
+                details:
+                  error && typeof error === "object" && "details" in error
+                    ? ((error as { details?: Record<string, string> | null }).details ?? null)
+                    : null,
                 match: null
               });
             }
@@ -88,6 +97,22 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
       </form>
 
       {state.error ? <p className="error">{state.error}</p> : null}
+      {state.details ? (
+        <details style={{ marginTop: 12 }}>
+          <summary className="muted">Показать OCR-диагностику</summary>
+          <pre
+            style={{
+              marginTop: 12,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              fontSize: 12,
+              lineHeight: 1.5
+            }}
+          >
+            {JSON.stringify(state.details, null, 2)}
+          </pre>
+        </details>
+      ) : null}
 
       {parsedMatch ? (
         <div className="match-card" style={{ marginTop: 18 }}>

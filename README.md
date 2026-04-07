@@ -24,7 +24,7 @@
 
 ## Переменные окружения
 
-Пример есть в [.env.example](/Users/akulaev/codex/.env.example).
+Пример есть в `.env.example`.
 
 Обязательные значения:
 
@@ -36,7 +36,7 @@
 Пример:
 
 ```env
-DATABASE_URL="postgresql://cs2_user:strong_password@127.0.0.1:5432/cs2_stats?schema=public"
+DATABASE_URL="postgresql://cs2_user:strong_password@10.10.10.20:5432/cs2_stats?schema=public"
 APP_TIMEZONE="Europe/Moscow"
 TESSERACT_BIN="tesseract"
 OCR_LANG="eng+rus"
@@ -47,7 +47,6 @@ OCR_LANG="eng+rus"
 1. Установить зависимости:
 
 ```bash
-cd /Users/akulaev/codex
 npm install
 ```
 
@@ -84,7 +83,7 @@ cd /var/www/cs2-parser
 cp .env.example .env
 nano .env
 chmod +x deploy/deploy-vm.sh
-APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP ./deploy/deploy-vm.sh
+APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMAIN_OR_IP ./deploy/deploy-vm.sh
 ```
 
 Скрипт:
@@ -99,7 +98,7 @@ APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP ./deploy/dep
 Если пакеты уже установлены, можно ускорить повторный деплой:
 
 ```bash
-APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
+APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
 ```
 
 ### 1. Подготовить сервер
@@ -156,7 +155,7 @@ nano .env
 Пример содержимого:
 
 ```env
-DATABASE_URL="postgresql://cs2_user:strong_password@127.0.0.1:5432/cs2_stats?schema=public"
+DATABASE_URL="postgresql://cs2_user:strong_password@10.10.10.20:5432/cs2_stats?schema=public"
 APP_TIMEZONE="Europe/Moscow"
 TESSERACT_BIN="tesseract"
 OCR_LANG="eng+rus"
@@ -191,7 +190,7 @@ WorkingDirectory=/var/www/cs2-parser
 Environment=NODE_ENV=production
 Environment=PORT=3000
 EnvironmentFile=/var/www/cs2-parser/.env
-ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+ExecStart=/usr/bin/npm run start -- --hostname 10.10.10.10 --port 3000
 Restart=always
 RestartSec=5
 
@@ -228,7 +227,7 @@ server {
     client_max_body_size 20M;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://10.10.10.10:3000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -255,7 +254,7 @@ sudo systemctl reload nginx
 ```bash
 cd /var/www/cs2-parser
 git pull
-APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
+APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
 ```
 
 ## Сезоны

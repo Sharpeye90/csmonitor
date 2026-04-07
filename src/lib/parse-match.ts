@@ -5,9 +5,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import sharp from "sharp";
+
 import type { ParsedPlayer, ParsedTeam } from "@/lib/types";
 
 const execFileAsync = promisify(execFile);
+
+type Region = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+type OcrOptions = {
+  lang?: string;
+  psm?: number;
+  whitelist?: string;
+};
 
 const KNOWN_MAPS = [
   { canonical: "Dust II", aliases: ["dust ii", "dust 2", "dustii"] },
@@ -21,136 +36,84 @@ const KNOWN_MAPS = [
   { canonical: "Overpass", aliases: ["overpass"] }
 ];
 
+function clampRegion(metadata: sharp.Metadata, region: Region) {
+  const imageWidth = metadata.width ?? 0;
+  const imageHeight = metadata.height ?? 0;
+
+  const left = Math.max(0, Math.min(region.left, imageWidth - 1));
+  const top = Math.max(0, Math.min(region.top, imageHeight - 1));
+  const width = Math.max(1, Math.min(region.width, imageWidth - left));
+  const height = Math.max(1, Math.min(region.height, imageHeight - top));
+
+  return { left, top, width, height };
+}
+
+function regionFromRatios(metadata: sharp.Metadata, ratios: Region) {
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+
+  return clampRegion(metadata, {
+    left: Math.round(width * ratios.left),
+    top: Math.round(height * ratios.top),
+    width: Math.round(width * ratios.width),
+    height: Math.round(height * ratios.height)
+  });
+}
+
 function normalizeText(input: string) {
   return input
     .replace(/[|]/g, " ")
     .replace(/[“”]/g, "\"")
     .replace(/[‘’]/g, "'")
     .replace(/[—–]/g, "-")
-    .replace(/[^\S\r\n]+/g, " ");
+    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/\r/g, "");
 }
 
-function cleanNickname(raw: string) {
-  return raw
-    .replace(/^\s*\d{1,3}\s+/g, "")
-    .replace(/^\s*[\W_]+/g, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
+async function preprocessRegion(input: Buffer, region: Region, mode: "names" | "stats" | "score" | "map") {
+  const image = sharp(input);
+  const metadata = await image.metadata();
+  const crop = regionFromRatios(metadata, region);
 
-function findMapName(text: string) {
-  const normalized = text.toLowerCase();
+  let pipeline = sharp(input)
+    .extract(crop)
+    .greyscale()
+    .normalize()
+    .resize({
+      width: crop.width * 3,
+      height: crop.height * 3,
+      fit: "fill"
+    })
+    .sharpen();
 
-  for (const map of KNOWN_MAPS) {
-    if (map.aliases.some((alias) => normalized.includes(alias))) {
-      return map.canonical;
-    }
+  if (mode === "stats" || mode === "score") {
+    pipeline = pipeline.linear(1.35, -12).threshold(155);
+  } else if (mode === "names") {
+    pipeline = pipeline.linear(1.15, -8);
+  } else {
+    pipeline = pipeline.linear(1.2, -10);
   }
 
-  const previewModeMap = normalized.match(/(?:premier|премьер)[^\n]*?([a-z]+(?:\s*(?:ii|2))?)/i);
-  if (previewModeMap?.[1]) {
-    return previewModeMap[1].trim();
-  }
-
-  return "Unknown";
+  return pipeline.png().toBuffer();
 }
 
-function parseScoreFromText(text: string) {
-  const matches = Array.from(text.matchAll(/(\d{1,2})\s*[-:]\s*(\d{1,2})/g));
-  const candidates = matches
-    .map((match) => ({
-      scoreA: Number(match[1]),
-      scoreB: Number(match[2])
-    }))
-    .filter((item) => item.scoreA <= 30 && item.scoreB <= 30);
-
-  if (!candidates.length) {
-    throw new Error("Не удалось распознать итоговый счет на скриншоте");
-  }
-
-  return candidates.sort((left, right) => right.scoreA + right.scoreB - (left.scoreA + left.scoreB))[0];
-}
-
-function parsePlayerLine(line: string): ParsedPlayer | null {
-  const normalized = line.replace(/[^\S\r\n]+/g, " ").trim();
-  const match = normalized.match(/^(.*?)(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,3})\s+(\d{2,5})$/);
-
-  if (!match) {
-    return null;
-  }
-
-  const nickname = cleanNickname(match[1]);
-  const kills = Number(match[2]);
-  const deaths = Number(match[3]);
-  const assists = Number(match[4]);
-  const headshotPct = Number(match[5]);
-  const damage = Number(match[6]);
-
-  if (!nickname || damage < 100 || kills > 60 || deaths > 60) {
-    return null;
-  }
-
-  return {
-    nickname,
-    kills,
-    deaths,
-    assists,
-    damage,
-    headshotPct,
-    kda: `${kills}/${deaths}`
-  };
-}
-
-function parsePlayers(lines: string[]) {
-  const players = lines
-    .map(parsePlayerLine)
-    .filter((player): player is ParsedPlayer => player !== null);
-
-  if (players.length < 2) {
-    throw new Error("Не удалось распознать строки игроков. Проверьте качество скриншота.");
-  }
-
-  const midpoint = Math.ceil(players.length / 2);
-  const topPlayers = players.slice(0, midpoint);
-  const bottomPlayers = players.slice(midpoint);
-
-  return { topPlayers, bottomPlayers };
-}
-
-function buildTeams(players: { topPlayers: ParsedPlayer[]; bottomPlayers: ParsedPlayer[] }, scoreA: number, scoreB: number): ParsedTeam[] {
-  return [
-    {
-      name: "Спецназ",
-      side: "CT",
-      score: scoreA,
-      players: players.topPlayers
-    },
-    {
-      name: "Террористы",
-      side: "T",
-      score: scoreB,
-      players: players.bottomPlayers
-    }
-  ];
-}
-
-async function runTesseract(buffer: Buffer) {
+async function runTesseractOnBuffer(buffer: Buffer, options: OcrOptions = {}) {
   const tesseractBin = process.env.TESSERACT_BIN || "tesseract";
-  const ocrLang = process.env.OCR_LANG || "eng+rus";
+  const ocrLang = options.lang || process.env.OCR_LANG || "eng+rus";
   const tempPath = join(tmpdir(), `${randomUUID()}.png`);
 
   await writeFile(tempPath, buffer);
 
   try {
-    const { stdout, stderr } = await execFileAsync(tesseractBin, [
-      tempPath,
-      "stdout",
-      "-l",
-      ocrLang,
-      "--psm",
-      "6"
-    ]);
+    const args = [tempPath, "stdout", "-l", ocrLang, "--psm", String(options.psm ?? 6)];
 
+    if (options.whitelist) {
+      args.push("-c", `tessedit_char_whitelist=${options.whitelist}`);
+    }
+
+    args.push("-c", "preserve_interword_spaces=1");
+
+    const { stdout, stderr } = await execFileAsync(tesseractBin, args);
     const text = normalizeText(stdout);
 
     if (!text.trim()) {
@@ -160,9 +123,7 @@ async function runTesseract(buffer: Buffer) {
     return text;
   } catch (error) {
     if (error instanceof Error) {
-      throw new Error(
-        `Локальный OCR не сработал. Убедитесь, что установлен tesseract и языки ${ocrLang}. ${error.message}`
-      );
+      throw new Error(`Локальный OCR не сработал: ${error.message}`);
     }
 
     throw error;
@@ -171,22 +132,272 @@ async function runTesseract(buffer: Buffer) {
   }
 }
 
-export async function parseMatchScreenshot(buffer: Buffer) {
-  const text = await runTesseract(buffer);
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+function pickBestOcrResult(results: string[]) {
+  return results
+    .map((text) => text.trim())
+    .sort((left, right) => right.length - left.length)[0] ?? "";
+}
 
-  const { scoreA, scoreB } = parseScoreFromText(text);
-  const mapName = findMapName(text);
-  const players = parsePlayers(lines);
+async function readRegionText(input: Buffer, region: Region, mode: "names" | "stats" | "score" | "map", options: OcrOptions[] = []) {
+  const processed = await preprocessRegion(input, region, mode);
+  const runs =
+    options.length > 0
+      ? options
+      : [
+          { psm: 6 },
+          { psm: 11 }
+        ];
+
+  const texts = await Promise.all(runs.map((item) => runTesseractOnBuffer(processed, item)));
+  return pickBestOcrResult(texts);
+}
+
+function cleanupName(line: string) {
+  return line
+    .replace(/^[\d\s]+/, "")
+    .replace(/^[^\p{L}\p{N}\[]+/u, "")
+    .replace(/[^\p{L}\p{N}\]_ |\-.]+$/gu, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function isProbablyName(line: string) {
+  const cleaned = cleanupName(line);
+
+  if (cleaned.length < 2) {
+    return false;
+  }
+
+  if (/убийства|смерти|помощи|урон|террористы|спецназ|победа/i.test(cleaned)) {
+    return false;
+  }
+
+  return /[\p{L}]/u.test(cleaned);
+}
+
+function parseNameLines(text: string) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(isProbablyName)
+    .map(cleanupName);
+}
+
+function parseStatLine(line: string): Omit<ParsedPlayer, "nickname" | "kda"> | null {
+  const numbers = Array.from(line.matchAll(/\d{1,5}/g)).map((item) => Number(item[0]));
+
+  if (numbers.length < 4) {
+    return null;
+  }
+
+  const tail = numbers.slice(-5);
+
+  if (tail.length === 5) {
+    const [kills, deaths, assists, headshotPct, damage] = tail;
+
+    if (damage < 100 || kills > 60 || deaths > 60 || headshotPct > 100) {
+      return null;
+    }
+
+    return {
+      kills,
+      deaths,
+      assists,
+      headshotPct,
+      damage
+    };
+  }
+
+  const [kills, deaths, headshotPct, damage] = tail;
+
+  if (damage < 100 || kills > 60 || deaths > 60 || headshotPct > 100) {
+    return null;
+  }
 
   return {
-    mapName,
+    kills,
+    deaths,
+    assists: null,
+    headshotPct,
+    damage
+  };
+}
+
+function parseStatsLines(text: string) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .map(parseStatLine)
+    .filter((item): item is NonNullable<ReturnType<typeof parseStatLine>> => item !== null);
+}
+
+function pairPlayers(names: string[], stats: ReturnType<typeof parseStatsLines>) {
+  const count = Math.min(names.length, stats.length);
+
+  return Array.from({ length: count }, (_, index) => {
+    const stat = stats[index];
+
+    return {
+      nickname: names[index],
+      kills: stat.kills,
+      deaths: stat.deaths,
+      assists: stat.assists,
+      headshotPct: stat.headshotPct,
+      damage: stat.damage,
+      kda: `${stat.kills}/${stat.deaths}`
+    } satisfies ParsedPlayer;
+  });
+}
+
+function parseScoreText(text: string) {
+  const match = text.match(/(\d{1,2})\s*[-:]\s*(\d{1,2})/);
+
+  if (match) {
+    return {
+      scoreA: Number(match[1]),
+      scoreB: Number(match[2])
+    };
+  }
+
+  const loose = Array.from(text.matchAll(/\d{1,2}/g)).map((item) => Number(item[0]));
+  if (loose.length >= 2) {
+    return {
+      scoreA: loose[0],
+      scoreB: loose[1]
+    };
+  }
+
+  throw new Error("Не удалось распознать итоговый счет");
+}
+
+function parseMapName(text: string) {
+  const normalized = text.toLowerCase();
+
+  for (const map of KNOWN_MAPS) {
+    if (map.aliases.some((alias) => normalized.includes(alias))) {
+      return map.canonical;
+    }
+  }
+
+  return "Unknown";
+}
+
+function buildError(details: Record<string, string>) {
+  const error = new Error("Не удалось распознать строки игроков. Проверьте качество скриншота.");
+  (error as Error & { details?: Record<string, string> }).details = details;
+  return error;
+}
+
+export async function parseMatchScreenshot(buffer: Buffer) {
+  const metadata = await sharp(buffer).metadata();
+
+  if (!metadata.width || !metadata.height) {
+    throw new Error("Не удалось определить размеры изображения");
+  }
+
+  const scoreText = await readRegionText(
+    buffer,
+    { left: 0.39, top: 0.03, width: 0.22, height: 0.08 },
+    "score",
+    [
+      { psm: 7, whitelist: "0123456789:-" },
+      { psm: 6, whitelist: "0123456789:-" }
+    ]
+  );
+
+  const mapText = await readRegionText(
+    buffer,
+    { left: 0.16, top: 0.33, width: 0.32, height: 0.08 },
+    "map",
+    [{ psm: 6 }]
+  );
+
+  const topNamesText = await readRegionText(
+    buffer,
+    { left: 0.23, top: 0.43, width: 0.34, height: 0.19 },
+    "names",
+    [{ psm: 6 }, { psm: 11 }]
+  );
+
+  const topStatsText = await readRegionText(
+    buffer,
+    { left: 0.60, top: 0.43, width: 0.22, height: 0.19 },
+    "stats",
+    [
+      { psm: 6, whitelist: "0123456789 " },
+      { psm: 11, whitelist: "0123456789 " }
+    ]
+  );
+
+  const bottomNamesText = await readRegionText(
+    buffer,
+    { left: 0.23, top: 0.70, width: 0.34, height: 0.18 },
+    "names",
+    [{ psm: 6 }, { psm: 11 }]
+  );
+
+  const bottomStatsText = await readRegionText(
+    buffer,
+    { left: 0.60, top: 0.70, width: 0.22, height: 0.18 },
+    "stats",
+    [
+      { psm: 6, whitelist: "0123456789 " },
+      { psm: 11, whitelist: "0123456789 " }
+    ]
+  );
+
+  const topNames = parseNameLines(topNamesText);
+  const bottomNames = parseNameLines(bottomNamesText);
+  const topStats = parseStatsLines(topStatsText);
+  const bottomStats = parseStatsLines(bottomStatsText);
+
+  if (!topNames.length || !bottomNames.length || !topStats.length || !bottomStats.length) {
+    throw buildError({
+      scoreText,
+      mapText,
+      topNamesText,
+      topStatsText,
+      bottomNamesText,
+      bottomStatsText
+    });
+  }
+
+  const topPlayers = pairPlayers(topNames, topStats);
+  const bottomPlayers = pairPlayers(bottomNames, bottomStats);
+
+  if (!topPlayers.length || !bottomPlayers.length) {
+    throw buildError({
+      scoreText,
+      mapText,
+      topNamesText,
+      topStatsText,
+      bottomNamesText,
+      bottomStatsText
+    });
+  }
+
+  const { scoreA, scoreB } = parseScoreText(scoreText);
+
+  const teams: ParsedTeam[] = [
+    {
+      name: "Спецназ",
+      side: "CT",
+      score: scoreA,
+      players: topPlayers
+    },
+    {
+      name: "Террористы",
+      side: "T",
+      score: scoreB,
+      players: bottomPlayers
+    }
+  ];
+
+  return {
+    mapName: parseMapName(mapText),
     score: `${scoreA}-${scoreB}`,
     scoreA,
     scoreB,
-    teams: buildTeams(players, scoreA, scoreB)
+    teams
   };
 }
