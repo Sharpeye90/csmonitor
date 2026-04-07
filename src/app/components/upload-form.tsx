@@ -5,17 +5,8 @@ import { useState, useTransition } from "react";
 
 import type { SavedMatch, SeasonSummary } from "@/lib/types";
 
-type UploadDetails = {
-  parsedPreview?: string;
-  engineDebug?: unknown;
-  ocrTexts?: Record<string, string>;
-  zones?: Array<{ name: string; image: string; processedImage: string; text: string; debug?: unknown }>;
-};
-
 type UploadState = {
   error: string | null;
-  details?: UploadDetails | null;
-  testMode?: boolean;
   match: SavedMatch | null;
 };
 
@@ -108,19 +99,13 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
     const payload = (await response.json()) as UploadState;
 
     if (!response.ok) {
-      const error = new Error(payload.error || "Не удалось обработать скриншот") as Error & {
-        details?: UploadDetails | null;
-      };
-      error.details = payload.details ?? null;
-      throw error;
+      throw new Error(payload.error || "Не удалось обработать скриншот");
     }
 
     setState(payload);
     setEditableMatch(payload.match ? cloneMatch(payload.match) : null);
     setIsEditing(false);
-    if (!payload.testMode) {
-      router.refresh();
-    }
+    router.refresh();
   }
 
   return (
@@ -138,10 +123,6 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
             } catch (error) {
               setState({
                 error: error instanceof Error ? error.message : "Неизвестная ошибка",
-                details:
-                  error && typeof error === "object" && "details" in error
-                    ? ((error as { details?: UploadDetails | null }).details ?? null)
-                    : null,
                 match: null
               });
             }
@@ -178,55 +159,12 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
             ))}
           </select>
         </label>
-        <label className="checkbox-row">
-          <input name="testMode" type="checkbox" />
-          Тестовый режим без сохранения
-        </label>
         <button type="submit" disabled={isPending}>
           {isPending ? "Обрабатываем..." : "Запустить"}
         </button>
       </form>
 
       {state.error ? <p className="error">{state.error}</p> : null}
-      {state.details ? (
-        <details style={{ marginTop: 12 }}>
-          <summary className="muted">
-            {state.testMode ? "Показать диагностику тестового режима" : "Показать OCR-диагностику"}
-          </summary>
-          <pre
-            style={{
-              marginTop: 12,
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              fontSize: 12,
-              lineHeight: 1.5
-            }}
-          >
-            {JSON.stringify(
-              {
-                parsedPreview: state.details.parsedPreview,
-                engineDebug: state.details.engineDebug,
-                ocrTexts: state.details.ocrTexts
-              },
-              null,
-              2
-            )}
-          </pre>
-          {state.details.zones?.length ? (
-            <div className="zones-grid">
-              {state.details.zones.map((zone) => (
-                <div key={zone.name} className="zone-card">
-                  <strong>{zone.name}</strong>
-                  <img src={zone.image} alt={zone.name} />
-                  <img src={zone.processedImage} alt={`${zone.name} processed`} />
-                  <pre>{zone.text || "(empty)"}</pre>
-                  <pre>{JSON.stringify(zone.debug ?? null, null, 2)}</pre>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </details>
-      ) : null}
 
       {parsedMatch ? (
         <div className="match-card" style={{ marginTop: 18 }}>
@@ -239,11 +177,6 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
               <p className="muted" style={{ marginBottom: 0 }}>
                 Сезон: {parsedMatch.season?.name ?? "не назначен"}
               </p>
-              {state.testMode ? (
-                <p className="muted" style={{ marginBottom: 0 }}>
-                  Режим: тестовый, без сохранения
-                </p>
-              ) : null}
             </div>
             <span className="score-chip">
               {parsedMatch.scoreA}-{parsedMatch.scoreB}
@@ -277,7 +210,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
                 }
                 disabled={isPending}
               >
-                {parsedMatch.id === "preview" ? "Сохранить в БД" : "Сохранить исправления"}
+                Сохранить исправления
               </button>
             ) : null}
           </div>
