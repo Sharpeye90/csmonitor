@@ -77,9 +77,16 @@ install_node_dependencies() {
 install_python_dependencies() {
   log "Устанавливаю Python OCR-зависимости"
   cd "${APP_DIR}"
+  local requirements_file="${APP_DIR}/requirements.txt"
+
+  if [[ ! -f "${requirements_file}" ]]; then
+    echo "Файл ${requirements_file} не найден. Проверьте, что код проекта полностью скопирован в ${APP_DIR}." >&2
+    exit 1
+  fi
+
   python3 -m venv .venv
   .venv/bin/pip install --upgrade pip
-  .venv/bin/pip install -r requirements.txt
+  .venv/bin/pip install -r "${requirements_file}"
 }
 
 run_migrations_and_build() {
