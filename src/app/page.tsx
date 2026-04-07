@@ -46,36 +46,89 @@ async function getSeasons() {
   }
 }
 
+async function getPlayerSeasonStats() {
+  try {
+    const matches = await prisma.match.findMany({
+      orderBy: {
+        playedOn: "desc"
+      },
+      include: {
+        season: true,
+        teams: {
+          include: {
+            players: true
+          }
+        }
+      }
+    });
+
+    const grouped = new Map<
+      string,
+      {
+        seasonName: string;
+        nickname: string;
+        matches: number;
+        kills: number;
+        deaths: number;
+        damage: number;
+        headshotPctTotal: number;
+      }
+    >();
+
+    for (const match of matches) {
+      const seasonName = match.season?.name ?? "Без сезона";
+
+      for (const team of match.teams) {
+        for (const player of team.players) {
+          const key = `${seasonName}::${player.nickname}`;
+          const existing = grouped.get(key) ?? {
+            seasonName,
+            nickname: player.nickname,
+            matches: 0,
+            kills: 0,
+            deaths: 0,
+            damage: 0,
+            headshotPctTotal: 0
+          };
+
+          existing.matches += 1;
+          existing.kills += player.kills;
+          existing.deaths += player.deaths;
+          existing.damage += player.damage;
+          existing.headshotPctTotal += player.headshotPct;
+          grouped.set(key, existing);
+        }
+      }
+    }
+
+    return Array.from(grouped.values())
+      .map((item) => ({
+        ...item,
+        kda: `${item.kills}/${item.deaths}`,
+        avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
+      }))
+      .sort((left, right) => {
+        if (left.seasonName !== right.seasonName) {
+          return left.seasonName.localeCompare(right.seasonName, "ru");
+        }
+
+        return right.kills - left.kills;
+      });
+  } catch {
+    return [];
+  }
+}
+
 export default async function HomePage() {
-  const [matches, seasons] = await Promise.all([getMatches(), getSeasons()]);
+  const [matches, seasons, playerSeasonStats] = await Promise.all([
+    getMatches(),
+    getSeasons(),
+    getPlayerSeasonStats()
+  ]);
 
   return (
     <main className="page-shell">
-      <section className="hero">
-        <div className="hero-card">
-          <span className="eyebrow">CS2 Match Ingest</span>
-          <h1>Парсер скриншотов результатов CS2</h1>
-          <p>
-            Веб-приложение принимает скриншот итогового табло, вытаскивает карту, счет,
-            список игроков и индивидуальную статистику, а затем сохраняет матч в PostgreSQL.
-          </p>
-
-          <div className="stats-strip">
-            <div className="stat-box">
-              <strong>{matches.length}</strong>
-              <span>матчей в базе</span>
-            </div>
-            <div className="stat-box">
-              <strong>2 команды</strong>
-              <span>на каждый матч</span>
-            </div>
-            <div className="stat-box">
-              <strong>Local OCR</strong>
-              <span>парсинг внутри сервиса</span>
-            </div>
-          </div>
-        </div>
-
+      <section className="controls-grid">
         <UploadForm
           seasons={seasons.map((season) => ({
             id: season.id,
@@ -84,9 +137,68 @@ export default async function HomePage() {
             endDate: season.endDate.toISOString()
           }))}
         />
+        <SeasonForm />
       </section>
 
       <section className="content-grid">
+        <div className="panel">
+          <h2 className="section-title">Игроки по сезонам</h2>
+          {playerSeasonStats.length ? (
+            <div className="table-scroll">
+              <table className="players-table">
+                <thead>
+                  <tr>
+                    <th>Сезон</th>
+                    <th>Игрок</th>
+                    <th>Матчи</th>
+                    <th>У</th>
+                    <th>С</th>
+                    <th>KDA</th>
+                    <th>Урон</th>
+                    <th>%ГЛ ср.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playerSeasonStats.map((row) => (
+                    <tr key={`${row.seasonName}-${row.nickname}`}>
+                      <td>{row.seasonName}</td>
+                      <td>{row.nickname}</td>
+                      <td>{row.matches}</td>
+                      <td>{row.kills}</td>
+                      <td>{row.deaths}</td>
+                      <td>{row.kda}</td>
+                      <td>{row.damage}</td>
+                      <td>{row.avgHeadshotPct}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">Пока нет данных по игрокам.</p>
+          )}
+        </div>
+
+        <div className="panel">
+          <h2 className="section-title">Сезоны</h2>
+          <div className="match-list">
+            {seasons.length ? (
+              seasons.map((season) => (
+                <div key={season.id} className="match-card compact-card">
+                  <h3>{season.name}</h3>
+                  <p className="muted">
+                    {formatRuDate(season.startDate, timeZone)} - {formatRuDate(season.endDate, timeZone)}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="muted">Сезоны пока не созданы.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="content-grid single-column">
         <div className="panel">
           <h2 className="section-title">Последние матчи</h2>
           <div className="match-list">
@@ -149,57 +261,8 @@ export default async function HomePage() {
               ))
             ) : (
               <p className="muted">
-                В базе пока нет матчей. Загрузите первый итоговый скриншот справа.
+                В базе пока нет матчей.
               </p>
-            )}
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2 className="section-title">Что сохраняется</h2>
-          <div className="match-list">
-            <div className="match-card">
-              <h3>Дата матча</h3>
-              <p className="muted">
-                Берется из момента загрузки скриншота. Если загрузка произошла до 06:00 по локальному
-                часовому поясу приложения, матч записывается предыдущим днем.
-              </p>
-            </div>
-            <div className="match-card">
-              <h3>Сезоны</h3>
-              <p className="muted">
-                Можно создать сезоны с диапазоном дат, а затем либо выбирать сезон вручную при загрузке,
-                либо позволить приложению автоматически определить сезон по дате матча.
-              </p>
-            </div>
-            <div className="match-card">
-              <h3>Структура матча</h3>
-              <p className="muted">
-                Сохраняются карта, итоговый счет, две команды и игроки с убийствами, смертями, уроном,
-                %ГЛ и строковым KDA в формате Убийства/Смерти.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="content-grid">
-        <SeasonForm />
-
-        <div className="panel">
-          <h2 className="section-title">Сезоны</h2>
-          <div className="match-list">
-            {seasons.length ? (
-              seasons.map((season) => (
-                <div key={season.id} className="match-card">
-                  <h3>{season.name}</h3>
-                  <p className="muted">
-                    {formatRuDate(season.startDate, timeZone)} - {formatRuDate(season.endDate, timeZone)}
-                  </p>
-                </div>
-              ))
-            ) : (
-              <p className="muted">Сезоны пока не созданы.</p>
             )}
           </div>
         </div>

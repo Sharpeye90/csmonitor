@@ -24,6 +24,8 @@ type OcrOptions = {
   whitelist?: string;
 };
 
+type PreprocessMode = "names" | "stats" | "score" | "map";
+
 const KNOWN_MAPS = [
   { canonical: "Dust II", aliases: ["dust ii", "dust 2", "dustii"] },
   { canonical: "Mirage", aliases: ["mirage"] },
@@ -70,28 +72,38 @@ function normalizeText(input: string) {
     .replace(/\r/g, "");
 }
 
-async function preprocessRegion(input: Buffer, region: Region, mode: "names" | "stats" | "score" | "map") {
+async function preprocessRegion(input: Buffer, region: Region, mode: PreprocessMode, variant: "enhanced" | "soft" | "raw" = "enhanced") {
   const image = sharp(input);
   const metadata = await image.metadata();
   const crop = regionFromRatios(metadata, region);
 
-  let pipeline = sharp(input)
-    .extract(crop)
-    .greyscale()
-    .normalize()
-    .resize({
-      width: crop.width * 3,
-      height: crop.height * 3,
-      fit: "fill"
-    })
-    .sharpen();
+  let pipeline = sharp(input).extract(crop).greyscale();
 
-  if (mode === "stats" || mode === "score") {
-    pipeline = pipeline.linear(1.35, -12).threshold(155);
-  } else if (mode === "names") {
-    pipeline = pipeline.linear(1.15, -8);
-  } else {
-    pipeline = pipeline.linear(1.2, -10);
+  if (variant !== "raw") {
+    pipeline = pipeline
+      .normalize()
+      .resize({
+        width: crop.width * (variant === "soft" ? 2 : 3),
+        height: crop.height * (variant === "soft" ? 2 : 3),
+        fit: "fill"
+      })
+      .sharpen();
+  }
+
+  if (variant === "enhanced") {
+    if (mode === "stats" || mode === "score") {
+      pipeline = pipeline.linear(1.35, -12).threshold(155);
+    } else if (mode === "names") {
+      pipeline = pipeline.linear(1.15, -8);
+    } else {
+      pipeline = pipeline.linear(1.2, -10);
+    }
+  } else if (variant === "soft") {
+    if (mode === "stats" || mode === "score") {
+      pipeline = pipeline.linear(1.15, -6);
+    } else {
+      pipeline = pipeline.linear(1.08, -2);
+    }
   }
 
   return pipeline.png().toBuffer();
@@ -116,11 +128,11 @@ async function runTesseractOnBuffer(buffer: Buffer, options: OcrOptions = {}) {
     const { stdout, stderr } = await execFileAsync(tesseractBin, args);
     const text = normalizeText(stdout);
 
-    if (!text.trim()) {
-      throw new Error(stderr || "tesseract не вернул текст");
-    }
-
-    return text;
+    return text.trim()
+      ? text
+      : stderr.trim()
+        ? `__OCR_STDERR__ ${stderr.trim()}`
+        : "";
   } catch (error) {
     if (error instanceof Error) {
       throw new Error(`Локальный OCR не сработал: ${error.message}`);
@@ -135,11 +147,19 @@ async function runTesseractOnBuffer(buffer: Buffer, options: OcrOptions = {}) {
 function pickBestOcrResult(results: string[]) {
   return results
     .map((text) => text.trim())
+    .filter((text) => text && !text.startsWith("__OCR_STDERR__"))
     .sort((left, right) => right.length - left.length)[0] ?? "";
 }
 
-async function readRegionText(input: Buffer, region: Region, mode: "names" | "stats" | "score" | "map", options: OcrOptions[] = []) {
-  const processed = await preprocessRegion(input, region, mode);
+async function tryOcr(buffer: Buffer, options: OcrOptions) {
+  try {
+    return await runTesseractOnBuffer(buffer, options);
+  } catch {
+    return "";
+  }
+}
+
+async function readRegionText(input: Buffer, region: Region, mode: PreprocessMode, options: OcrOptions[] = []) {
   const runs =
     options.length > 0
       ? options
@@ -148,7 +168,12 @@ async function readRegionText(input: Buffer, region: Region, mode: "names" | "st
           { psm: 11 }
         ];
 
-  const texts = await Promise.all(runs.map((item) => runTesseractOnBuffer(processed, item)));
+  const variants: Array<"enhanced" | "soft" | "raw"> = ["enhanced", "soft", "raw"];
+  const buffers = await Promise.all(variants.map((variant) => preprocessRegion(input, region, mode, variant)));
+  const texts = await Promise.all(
+    buffers.flatMap((buffer) => runs.map((item) => tryOcr(buffer, item)))
+  );
+
   return pickBestOcrResult(texts);
 }
 
@@ -351,7 +376,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
   const topStats = parseStatsLines(topStatsText);
   const bottomStats = parseStatsLines(bottomStatsText);
 
-  if (!topNames.length || !bottomNames.length || !topStats.length || !bottomStats.length) {
+  if (!scoreText || !mapText || !topNames.length || !bottomNames.length || !topStats.length || !bottomStats.length) {
     throw buildError({
       scoreText,
       mapText,
