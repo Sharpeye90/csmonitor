@@ -25,6 +25,19 @@ export type OcrRegionResult = {
   debug?: unknown;
 };
 
+export type PaddleOcrEngineDebug = {
+  pythonBin: string;
+  scriptPath: string;
+  workDir: string;
+  regionsRequested: number;
+  stdoutLength?: number;
+  stderrText?: string;
+  parsedJson?: boolean;
+  regionsReturned?: number;
+  error?: string;
+  stdoutPreview?: string;
+};
+
 export async function readRegionsWithPaddleOCR(regions: OcrRegionManifest[], imageBuffer: Buffer) {
   const root = process.cwd();
   const workDir = join(root, ".paddlex");
@@ -34,6 +47,12 @@ export async function readRegionsWithPaddleOCR(regions: OcrRegionManifest[], ima
   const manifestPath = join(tmpdir(), `${randomUUID()}.json`);
   const pythonBin = join(root, ".venv", "bin", "python");
   const scriptPath = join(root, "scripts", "paddle_ocr_regions.py");
+  const engineDebug: PaddleOcrEngineDebug = {
+    pythonBin,
+    scriptPath,
+    workDir,
+    regionsRequested: regions.length
+  };
 
   await writeFile(imagePath, imageBuffer);
   await writeFile(manifestPath, JSON.stringify({ regions }, null, 2));
@@ -54,16 +73,36 @@ export async function readRegionsWithPaddleOCR(regions: OcrRegionManifest[], ima
       }
     );
 
+    engineDebug.stdoutLength = stdout.length;
+    engineDebug.stderrText = stderr ? stderr.slice(0, 4000) : "";
+    engineDebug.stdoutPreview = stdout.slice(0, 1000);
+
     if (stderr && !stdout) {
+      engineDebug.error = stderr.slice(0, 4000);
       throw new Error(stderr);
     }
 
     const parsed = JSON.parse(stdout) as { error?: string; regions?: OcrRegionResult[] };
+    engineDebug.parsedJson = true;
     if (parsed.error) {
+      engineDebug.error = parsed.error;
       throw new Error(parsed.error);
     }
 
-    return parsed.regions ?? [];
+    const resolvedRegions = parsed.regions ?? [];
+    engineDebug.regionsReturned = resolvedRegions.length;
+
+    return {
+      regions: resolvedRegions,
+      engineDebug
+    };
+  } catch (error) {
+    engineDebug.parsedJson ??= false;
+    engineDebug.error = error instanceof Error ? error.message : String(error);
+    return {
+      regions: [],
+      engineDebug
+    };
   } finally {
     await Promise.all([
       unlink(imagePath).catch(() => undefined),

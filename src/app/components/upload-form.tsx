@@ -7,6 +7,7 @@ import type { SavedMatch, SeasonSummary } from "@/lib/types";
 
 type UploadDetails = {
   parsedPreview?: string;
+  engineDebug?: unknown;
   ocrTexts?: Record<string, string>;
   zones?: Array<{ name: string; image: string; processedImage: string; text: string; debug?: unknown }>;
 };
@@ -127,6 +128,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
             {JSON.stringify(
               {
                 parsedPreview: state.details.parsedPreview,
+                engineDebug: state.details.engineDebug,
                 ocrTexts: state.details.ocrTexts
               },
               null,

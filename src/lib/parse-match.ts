@@ -824,7 +824,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     ]).flat()
   ];
 
-  const ocrRegions = await readRegionsWithPaddleOCR(manifests, buffer);
+  const { regions: ocrRegions, engineDebug } = await readRegionsWithPaddleOCR(manifests, buffer);
   const ocrMap = new Map(ocrRegions.map((item) => [item.name, item]));
   const getText = (name: string) => ocrMap.get(name)?.text ?? "";
 
@@ -937,12 +937,14 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     scoreB: finalScoreB,
     teams,
     diagnostics: {
+      engineDebug,
       ocrTexts: Object.fromEntries(ocrRegions.map((region) => [region.name, region.text])),
       zones: ocrRegions.map((region) => ({
         name: region.name,
         image: region.image,
         processedImage: region.processedImage,
-        text: region.text
+        text: region.text,
+        debug: region.debug
       }))
     }
   };
