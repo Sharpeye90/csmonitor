@@ -1,0 +1,17 @@
+[Unit]
+Description=CS2 Match Parser
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/cs2-parser
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/var/www/cs2-parser/.env
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

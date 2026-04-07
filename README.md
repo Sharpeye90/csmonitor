@@ -75,6 +75,33 @@ npm run dev
 
 Ниже пример для `Ubuntu 24.04`.
 
+### Быстрый способ
+
+Если код уже лежит на сервере и база данных уже развернута, достаточно:
+
+```bash
+cd /var/www/cs2-parser
+cp .env.example .env
+nano .env
+chmod +x deploy/deploy-vm.sh
+APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP ./deploy/deploy-vm.sh
+```
+
+Скрипт:
+
+- установит `nginx`, `nodejs`, `tesseract`;
+- поставит npm-зависимости;
+- применит Prisma migration;
+- соберет приложение;
+- создаст `systemd` unit;
+- создаст `nginx` config и перезагрузит сервисы.
+
+Если пакеты уже установлены, можно ускорить повторный деплой:
+
+```bash
+APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
+```
+
 ### 1. Подготовить сервер
 
 Подключиться по SSH и установить системные пакеты:
@@ -228,10 +255,7 @@ sudo systemctl reload nginx
 ```bash
 cd /var/www/cs2-parser
 git pull
-npm install
-npx prisma migrate deploy
-npm run build
-sudo systemctl restart cs2-parser
+APP_USER=$USER APP_DIR=/var/www/cs2-parser DOMAIN=YOUR_DOMAIN_OR_IP INSTALL_PACKAGES=0 ./deploy/deploy-vm.sh
 ```
 
 ## Сезоны
