@@ -520,10 +520,8 @@ function parseMapName(text: string) {
   return "Unknown";
 }
 
-function buildError(details: Record<string, string>) {
-  const error = new Error("Не удалось распознать строки игроков. Проверьте качество скриншота.");
-  (error as Error & { details?: Record<string, string> }).details = details;
-  return error;
+function buildError() {
+  return new Error("Не удалось распознать строки игроков. Проверьте качество скриншота.");
 }
 
 async function readTeamBlock(buffer: Buffer, block: TeamBlock) {
@@ -829,7 +827,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     { name: `bottomRow${index + 1}StatsText`, ...buildStatsRowRegion(BOTTOM_TEAM, index), mode: "stats" as const, lang: "en" as const }
   ]).flat();
 
-  const { regions: baseRegions, engineDebug: baseEngineDebug } = await readRegionsWithPaddleOCR(baseManifests, buffer);
+  const baseRegions = await readRegionsWithPaddleOCR(baseManifests, buffer);
   const ocrRegions = [...baseRegions];
   const ocrMap = new Map(ocrRegions.map((item) => [item.name, item]));
   const getText = (name: string) => ocrMap.get(name)?.text ?? "";
@@ -856,10 +854,8 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     (process.env.PADDLE_OCR_ENABLE_ROW_FALLBACK ?? "auto").toLowerCase() !== "false" &&
     (!hasEnoughColumnData(topColumnInput) || !hasEnoughColumnData(bottomColumnInput));
 
-  let rowEngineDebug = null;
   if (shouldRunRowFallback) {
-    const { regions: rowRegions, engineDebug } = await readRegionsWithPaddleOCR(rowFallbackManifests, buffer);
-    rowEngineDebug = engineDebug;
+    const rowRegions = await readRegionsWithPaddleOCR(rowFallbackManifests, buffer);
     for (const region of rowRegions) {
       ocrRegions.push(region);
       ocrMap.set(region.name, region);
@@ -901,31 +897,7 @@ export async function parseMatchScreenshot(buffer: Buffer) {
   });
 
   if (!topPlayers.length || !bottomPlayers.length) {
-    throw buildError({
-      scoreText,
-      topScoreText,
-      bottomScoreText,
-      mapText,
-      mapTextEng,
-      topNamesText: topTeamColumns.debug.namesText,
-      topKillsText: topTeamColumns.debug.killsText,
-      topDeathsText: topTeamColumns.debug.deathsText,
-      topAssistsText: topTeamColumns.debug.assistsText,
-      topHeadshotText: topTeamColumns.debug.headshotText,
-      topDamageText: topTeamColumns.debug.damageText,
-      bottomNamesText: bottomTeamColumns.debug.namesText,
-      bottomKillsText: bottomTeamColumns.debug.killsText,
-      bottomDeathsText: bottomTeamColumns.debug.deathsText,
-      bottomAssistsText: bottomTeamColumns.debug.assistsText,
-      bottomHeadshotText: bottomTeamColumns.debug.headshotText,
-      bottomDamageText: bottomTeamColumns.debug.damageText,
-      ...Object.fromEntries(
-        Object.entries(topTeamRows.debug).map(([key, value]) => [`top${key}`, value])
-      ),
-      ...Object.fromEntries(
-        Object.entries(bottomTeamRows.debug).map(([key, value]) => [`bottom${key}`, value])
-      )
-    });
+    throw buildError();
   }
 
   const parsedBannerScore = tryParseScoreText(scoreText);
@@ -963,21 +935,6 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     score: `${finalScoreA}-${finalScoreB}`,
     scoreA: finalScoreA,
     scoreB: finalScoreB,
-    teams,
-    diagnostics: {
-      engineDebug: {
-        base: baseEngineDebug,
-        rowFallback: rowEngineDebug,
-        shouldRunRowFallback
-      },
-      ocrTexts: Object.fromEntries(ocrRegions.map((region) => [region.name, region.text])),
-      zones: ocrRegions.map((region) => ({
-        name: region.name,
-        image: region.image,
-        processedImage: region.processedImage,
-        text: region.text,
-        debug: region.debug
-      }))
-    }
+    teams
   };
 }

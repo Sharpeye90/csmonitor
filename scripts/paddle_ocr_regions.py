@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import base64
 import json
 import os
 import sys
@@ -9,13 +8,6 @@ from pathlib import Path
 
 import cv2
 from paddleocr import PaddleOCR
-
-
-def encode_png(image):
-    ok, buffer = cv2.imencode(".png", image)
-    if not ok:
-      return ""
-    return "data:image/png;base64," + base64.b64encode(buffer.tobytes()).decode("ascii")
 
 
 def clamp(value, min_value, max_value):
@@ -138,11 +130,6 @@ def score_text(text):
     return len(compact) + alnum * 2 + lines * 4
 
 
-def preview_texts(ocr_result):
-    texts = extract_text(ocr_result).splitlines()
-    return [text for text in texts if text][:20]
-
-
 def try_predict(ocr, payload):
     fast_mode = env_bool("PADDLE_OCR_FAST_MODE", True)
     attempts = [lambda: ocr.predict(payload)]
@@ -151,42 +138,21 @@ def try_predict(ocr, payload):
 
     best_text = ""
     best_score = 0
-    debug_attempts = []
 
-    for index, attempt in enumerate(attempts):
+    for attempt in attempts:
         try:
             prediction = attempt()
             text = extract_text(prediction)
             text_score = score_text(text)
-            debug_attempts.append(
-                {
-                    "method": "predict" if index == 0 else "ocr",
-                    "text": text,
-                    "score": text_score,
-                    "tokens": preview_texts(prediction),
-                }
-            )
             if text_score > best_score:
                 best_text = text
                 best_score = text_score
         except TypeError:
-            debug_attempts.append(
-                {
-                    "method": "predict" if index == 0 else "ocr",
-                    "error": "TypeError",
-                }
-            )
             continue
-        except Exception as exc:
-            debug_attempts.append(
-                {
-                    "method": "predict" if index == 0 else "ocr",
-                    "error": str(exc),
-                }
-            )
+        except Exception:
             continue
 
-    return best_text, debug_attempts
+    return best_text
 
 
 def predict_text(ocr, images):
@@ -195,47 +161,25 @@ def predict_text(ocr, images):
     try:
         best_text = ""
         best_score = 0
-        best_source = None
-        debug_attempts = []
 
         fast_mode = env_bool("PADDLE_OCR_FAST_MODE", True)
 
-        for source_name, image in images:
-            text, source_attempts = try_predict(ocr, image)
+        for _, image in images:
+            text = try_predict(ocr, image)
             text_score = score_text(text)
-            debug_attempts.append(
-                {
-                    "source": source_name,
-                    "input": "array",
-                    "attempts": source_attempts,
-                }
-            )
             if text_score > best_score:
                 best_text = text
                 best_score = text_score
-                best_source = f"{source_name}:array"
 
             if not fast_mode:
                 cv2.imwrite(temp_path, image)
-                text, source_attempts = try_predict(ocr, temp_path)
+                text = try_predict(ocr, temp_path)
                 text_score = score_text(text)
-                debug_attempts.append(
-                    {
-                        "source": source_name,
-                        "input": "path",
-                        "attempts": source_attempts,
-                    }
-                )
                 if text_score > best_score:
                     best_text = text
                     best_score = text_score
-                    best_source = f"{source_name}:path"
 
-        return best_text, {
-            "bestSource": best_source,
-            "bestScore": best_score,
-            "attempts": debug_attempts,
-        }
+        return best_text
     finally:
         try:
             os.unlink(temp_path)
@@ -265,13 +209,6 @@ def main():
         processed = preprocess(crop, region.get("mode", "names"))
         lang = region.get("lang", "ru")
         text = ""
-        debug = {
-            "mode": region.get("mode", "names"),
-            "lang": lang,
-            "cropSize": [int(crop.shape[1]), int(crop.shape[0])],
-            "processedSize": [int(processed.shape[1]), int(processed.shape[0])],
-            "fastMode": env_bool("PADDLE_OCR_FAST_MODE", True),
-        }
         try:
             ocr = get_ocr(lang)
             images = [("crop", crop)]
@@ -282,22 +219,14 @@ def main():
             else:
                 images.append(("enlargedCrop", upscale(crop, 1.5)))
 
-            text, ocr_debug = predict_text(
-                ocr,
-                images,
-            )
-            debug["ocr"] = ocr_debug
-        except Exception as exc:
-            text = f"__OCR_ERROR__ {exc}"
-            debug["error"] = str(exc)
+            text = predict_text(ocr, images)
+        except Exception:
+            text = ""
 
         result["regions"].append(
             {
                 "name": region["name"],
                 "text": text,
-                "image": encode_png(crop),
-                "processedImage": encode_png(processed),
-                "debug": debug,
             }
         )
 

@@ -79,8 +79,6 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get("screenshot");
     const seasonId = formData.get("seasonId");
-    const testMode = formData.get("testMode") === "on";
-
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Файл скриншота не передан", match: null }, { status: 400 });
     }
@@ -101,34 +99,6 @@ export async function POST(request: Request) {
       scoreB: parsed.scoreB,
       teams: parsed.teams
     };
-
-    if (testMode) {
-      return NextResponse.json({
-        error: null,
-        details: {
-          parsedPreview: JSON.stringify(preview, null, 2),
-          ...(parsed.diagnostics ?? {})
-        },
-        match: toClientMatch({
-          id: "preview",
-          uploadedAt,
-          playedOn,
-          mapName: parsed.mapName,
-          scoreA: parsed.scoreA,
-          scoreB: parsed.scoreB,
-          season: season
-            ? {
-                id: season.id,
-                name: season.name,
-                startDate: season.startDate,
-                endDate: season.endDate
-              }
-            : null,
-          teams: parsed.teams
-        }),
-        testMode: true
-      });
-    }
 
     const saved = await prisma.match.create({
       data: {
@@ -176,24 +146,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       error: null,
-      details: {
-        parsedPreview: JSON.stringify(preview, null, 2),
-        ...(parsed.diagnostics ?? {})
-      },
-      match: toClientMatch(saved),
-      testMode: false
+      match: toClientMatch(saved)
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Внутренняя ошибка сервера";
-    const details =
-      error && typeof error === "object" && "details" in error
-        ? (error as { details?: Record<string, string> }).details ?? null
-        : null;
 
     return NextResponse.json(
       {
         error: message,
-        details,
         match: null
       },
       { status: 500 }
