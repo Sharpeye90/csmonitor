@@ -111,7 +111,7 @@ APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMA
 
 ```bash
 sudo apt update
-sudo apt install -y nginx postgresql postgresql-contrib git curl python3 python3-venv python3-pip
+sudo apt install -y nginx postgresql postgresql-contrib git curl python3 python3-venv python3-pip libgl1 libglib2.0-0
 ```
 
 Установить Node.js 22:

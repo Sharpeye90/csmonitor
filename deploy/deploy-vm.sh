@@ -44,7 +44,17 @@ install_system_packages() {
 
   log "Устанавливаю системные зависимости"
   sudo apt update
-  sudo apt install -y nginx git curl ca-certificates rsync python3 python3-venv python3-pip
+  sudo apt install -y \
+    nginx \
+    git \
+    curl \
+    ca-certificates \
+    rsync \
+    python3 \
+    python3-venv \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0
 
   if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q "^v${NODE_MAJOR}\."; then
     log "Устанавливаю Node.js ${NODE_MAJOR}"
