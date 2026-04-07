@@ -26,6 +26,15 @@ type OcrOptions = {
 
 type PreprocessMode = "names" | "stats" | "score" | "map";
 
+type TeamBlock = {
+  names: Region;
+  kills: Region;
+  deaths: Region;
+  assists: Region;
+  headshotPct: Region;
+  damage: Region;
+};
+
 const KNOWN_MAPS = [
   { canonical: "Dust II", aliases: ["dust ii", "dust 2", "dustii"] },
   { canonical: "Mirage", aliases: ["mirage"] },
@@ -37,6 +46,27 @@ const KNOWN_MAPS = [
   { canonical: "Vertigo", aliases: ["vertigo"] },
   { canonical: "Overpass", aliases: ["overpass"] }
 ];
+
+const SCORE_REGION: Region = { left: 0.405, top: 0.015, width: 0.17, height: 0.07 };
+const MAP_REGION: Region = { left: 0.11, top: 0.31, width: 0.24, height: 0.06 };
+
+const TOP_TEAM: TeamBlock = {
+  names: { left: 0.25, top: 0.42, width: 0.34, height: 0.19 },
+  kills: { left: 0.61, top: 0.42, width: 0.045, height: 0.19 },
+  deaths: { left: 0.665, top: 0.42, width: 0.045, height: 0.19 },
+  assists: { left: 0.72, top: 0.42, width: 0.045, height: 0.19 },
+  headshotPct: { left: 0.775, top: 0.42, width: 0.055, height: 0.19 },
+  damage: { left: 0.83, top: 0.42, width: 0.075, height: 0.19 }
+};
+
+const BOTTOM_TEAM: TeamBlock = {
+  names: { left: 0.25, top: 0.69, width: 0.34, height: 0.18 },
+  kills: { left: 0.61, top: 0.69, width: 0.045, height: 0.18 },
+  deaths: { left: 0.665, top: 0.69, width: 0.045, height: 0.18 },
+  assists: { left: 0.72, top: 0.69, width: 0.045, height: 0.18 },
+  headshotPct: { left: 0.775, top: 0.69, width: 0.055, height: 0.18 },
+  damage: { left: 0.83, top: 0.69, width: 0.075, height: 0.18 }
+};
 
 function clampRegion(metadata: sharp.Metadata, region: Region) {
   const imageWidth = metadata.width ?? 0;
@@ -72,7 +102,12 @@ function normalizeText(input: string) {
     .replace(/\r/g, "");
 }
 
-async function preprocessRegion(input: Buffer, region: Region, mode: PreprocessMode, variant: "enhanced" | "soft" | "raw" = "enhanced") {
+async function preprocessRegion(
+  input: Buffer,
+  region: Region,
+  mode: PreprocessMode,
+  variant: "enhanced" | "soft" | "raw" = "enhanced"
+) {
   const image = sharp(input);
   const metadata = await image.metadata();
   const crop = regionFromRatios(metadata, region);
@@ -94,15 +129,15 @@ async function preprocessRegion(input: Buffer, region: Region, mode: PreprocessM
     if (mode === "stats" || mode === "score") {
       pipeline = pipeline.linear(1.35, -12).threshold(155);
     } else if (mode === "names") {
-      pipeline = pipeline.linear(1.15, -8);
+      pipeline = pipeline.linear(1.12, -6);
     } else {
-      pipeline = pipeline.linear(1.2, -10);
+      pipeline = pipeline.linear(1.2, -8);
     }
   } else if (variant === "soft") {
     if (mode === "stats" || mode === "score") {
       pipeline = pipeline.linear(1.15, -6);
     } else {
-      pipeline = pipeline.linear(1.08, -2);
+      pipeline = pipeline.linear(1.05, -2);
     }
   }
 
@@ -133,12 +168,6 @@ async function runTesseractOnBuffer(buffer: Buffer, options: OcrOptions = {}) {
       : stderr.trim()
         ? `__OCR_STDERR__ ${stderr.trim()}`
         : "";
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Локальный OCR не сработал: ${error.message}`);
-    }
-
-    throw error;
   } finally {
     await unlink(tempPath).catch(() => undefined);
   }
@@ -170,9 +199,7 @@ async function readRegionText(input: Buffer, region: Region, mode: PreprocessMod
 
   const variants: Array<"enhanced" | "soft" | "raw"> = ["enhanced", "soft", "raw"];
   const buffers = await Promise.all(variants.map((variant) => preprocessRegion(input, region, mode, variant)));
-  const texts = await Promise.all(
-    buffers.flatMap((buffer) => runs.map((item) => tryOcr(buffer, item)))
-  );
+  const texts = await Promise.all(buffers.flatMap((buffer) => runs.map((item) => tryOcr(buffer, item))));
 
   return pickBestOcrResult(texts);
 }
@@ -193,102 +220,106 @@ function isProbablyName(line: string) {
     return false;
   }
 
-  if (/убийства|смерти|помощи|урон|террористы|спецназ|победа/i.test(cleaned)) {
+  if (/убийства|смерти|помощи|урон|террористы|спецназ|победа|премьер/i.test(cleaned)) {
     return false;
   }
 
-  return /[\p{L}]/u.test(cleaned);
+  return /[\p{L}\d_]/u.test(cleaned);
+}
+
+function uniqueStrings(values: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(value);
+    }
+  }
+
+  return result;
 }
 
 function parseNameLines(text: string) {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(isProbablyName)
-    .map(cleanupName);
+  return uniqueStrings(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(isProbablyName)
+      .map(cleanupName)
+      .filter((line) => line.length >= 3)
+  );
 }
 
-function parseStatLine(line: string): Omit<ParsedPlayer, "nickname" | "kda"> | null {
-  const numbers = Array.from(line.matchAll(/\d{1,5}/g)).map((item) => Number(item[0]));
+function parseNumbers(text: string, min: number, max: number) {
+  return Array.from(text.matchAll(/\d{1,5}/g))
+    .map((item) => Number(item[0]))
+    .filter((value) => value >= min && value <= max);
+}
 
-  if (numbers.length < 4) {
-    return null;
+function alignColumn(numbers: number[], expected: number) {
+  if (numbers.length >= expected) {
+    return numbers.slice(0, expected);
   }
 
-  const tail = numbers.slice(-5);
+  return numbers;
+}
 
-  if (tail.length === 5) {
-    const [kills, deaths, assists, headshotPct, damage] = tail;
+function pairTeamPlayers(
+  names: string[],
+  kills: number[],
+  deaths: number[],
+  assists: number[],
+  headshotPct: number[],
+  damage: number[]
+) {
+  const candidateLengths = [names.length, kills.length, deaths.length, assists.length, headshotPct.length, damage.length]
+    .filter((value) => value > 0);
+  const expected = candidateLengths.length ? Math.min(...candidateLengths) : 0;
 
-    if (damage < 100 || kills > 60 || deaths > 60 || headshotPct > 100) {
-      return null;
-    }
+  if (expected < 3) {
+    return [];
+  }
+
+  const normalizedNames = names.slice(0, expected);
+  const normalizedKills = alignColumn(kills, expected);
+  const normalizedDeaths = alignColumn(deaths, expected);
+  const normalizedAssists = alignColumn(assists, expected);
+  const normalizedHeadshots = alignColumn(headshotPct, expected);
+  const normalizedDamage = alignColumn(damage, expected);
+
+  return Array.from({ length: expected }, (_, index) => {
+    const playerKills = normalizedKills[index] ?? 0;
+    const playerDeaths = normalizedDeaths[index] ?? 0;
 
     return {
-      kills,
-      deaths,
-      assists,
-      headshotPct,
-      damage
-    };
-  }
-
-  const [kills, deaths, headshotPct, damage] = tail;
-
-  if (damage < 100 || kills > 60 || deaths > 60 || headshotPct > 100) {
-    return null;
-  }
-
-  return {
-    kills,
-    deaths,
-    assists: null,
-    headshotPct,
-    damage
-  };
-}
-
-function parseStatsLines(text: string) {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .map(parseStatLine)
-    .filter((item): item is NonNullable<ReturnType<typeof parseStatLine>> => item !== null);
-}
-
-function pairPlayers(names: string[], stats: ReturnType<typeof parseStatsLines>) {
-  const count = Math.min(names.length, stats.length);
-
-  return Array.from({ length: count }, (_, index) => {
-    const stat = stats[index];
-
-    return {
-      nickname: names[index],
-      kills: stat.kills,
-      deaths: stat.deaths,
-      assists: stat.assists,
-      headshotPct: stat.headshotPct,
-      damage: stat.damage,
-      kda: `${stat.kills}/${stat.deaths}`
+      nickname: normalizedNames[index],
+      kills: playerKills,
+      deaths: playerDeaths,
+      assists: normalizedAssists[index] ?? null,
+      headshotPct: normalizedHeadshots[index] ?? 0,
+      damage: normalizedDamage[index] ?? 0,
+      kda: `${playerKills}/${playerDeaths}`
     } satisfies ParsedPlayer;
-  });
+  }).filter((player) => player.nickname && (player.kills > 0 || player.deaths > 0 || player.damage > 0));
 }
 
 function parseScoreText(text: string) {
-  const match = text.match(/(\d{1,2})\s*[-:]\s*(\d{1,2})/);
-
-  if (match) {
+  const direct = text.match(/(\d{1,2})\s*[-:]\s*(\d{1,2})/);
+  if (direct) {
     return {
-      scoreA: Number(match[1]),
-      scoreB: Number(match[2])
+      scoreA: Number(direct[1]),
+      scoreB: Number(direct[2])
     };
   }
 
-  const loose = Array.from(text.matchAll(/\d{1,2}/g)).map((item) => Number(item[0]));
-  if (loose.length >= 2) {
+  const values = parseNumbers(text, 0, 30);
+  if (values.length >= 2) {
     return {
-      scoreA: loose[0],
-      scoreB: loose[1]
+      scoreA: values[0],
+      scoreB: values[1]
     };
   }
 
@@ -313,6 +344,37 @@ function buildError(details: Record<string, string>) {
   return error;
 }
 
+async function readTeamBlock(buffer: Buffer, block: TeamBlock) {
+  const [namesText, killsText, deathsText, assistsText, headshotText, damageText] = await Promise.all([
+    readRegionText(buffer, block.names, "names", [{ psm: 6 }, { psm: 11 }]),
+    readRegionText(buffer, block.kills, "stats", [{ psm: 6, whitelist: "0123456789" }, { psm: 11, whitelist: "0123456789" }]),
+    readRegionText(buffer, block.deaths, "stats", [{ psm: 6, whitelist: "0123456789" }, { psm: 11, whitelist: "0123456789" }]),
+    readRegionText(buffer, block.assists, "stats", [{ psm: 6, whitelist: "0123456789" }, { psm: 11, whitelist: "0123456789" }]),
+    readRegionText(buffer, block.headshotPct, "stats", [{ psm: 6, whitelist: "0123456789" }, { psm: 11, whitelist: "0123456789" }]),
+    readRegionText(buffer, block.damage, "stats", [{ psm: 6, whitelist: "0123456789" }, { psm: 11, whitelist: "0123456789" }])
+  ]);
+
+  const names = parseNameLines(namesText);
+  const kills = parseNumbers(killsText, 0, 60);
+  const deaths = parseNumbers(deathsText, 0, 60);
+  const assists = parseNumbers(assistsText, 0, 30);
+  const headshotPct = parseNumbers(headshotText, 0, 100);
+  const damage = parseNumbers(damageText, 0, 5000);
+  const players = pairTeamPlayers(names, kills, deaths, assists, headshotPct, damage);
+
+  return {
+    players,
+    debug: {
+      namesText,
+      killsText,
+      deathsText,
+      assistsText,
+      headshotText,
+      damageText
+    }
+  };
+}
+
 export async function parseMatchScreenshot(buffer: Buffer) {
   const metadata = await sharp(buffer).metadata();
 
@@ -320,84 +382,32 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     throw new Error("Не удалось определить размеры изображения");
   }
 
-  const scoreText = await readRegionText(
-    buffer,
-    { left: 0.39, top: 0.03, width: 0.22, height: 0.08 },
-    "score",
-    [
+  const [scoreText, mapText, topTeam, bottomTeam] = await Promise.all([
+    readRegionText(buffer, SCORE_REGION, "score", [
       { psm: 7, whitelist: "0123456789:-" },
       { psm: 6, whitelist: "0123456789:-" }
-    ]
-  );
+    ]),
+    readRegionText(buffer, MAP_REGION, "map", [{ psm: 6 }]),
+    readTeamBlock(buffer, TOP_TEAM),
+    readTeamBlock(buffer, BOTTOM_TEAM)
+  ]);
 
-  const mapText = await readRegionText(
-    buffer,
-    { left: 0.16, top: 0.33, width: 0.32, height: 0.08 },
-    "map",
-    [{ psm: 6 }]
-  );
-
-  const topNamesText = await readRegionText(
-    buffer,
-    { left: 0.23, top: 0.43, width: 0.34, height: 0.19 },
-    "names",
-    [{ psm: 6 }, { psm: 11 }]
-  );
-
-  const topStatsText = await readRegionText(
-    buffer,
-    { left: 0.60, top: 0.43, width: 0.22, height: 0.19 },
-    "stats",
-    [
-      { psm: 6, whitelist: "0123456789 " },
-      { psm: 11, whitelist: "0123456789 " }
-    ]
-  );
-
-  const bottomNamesText = await readRegionText(
-    buffer,
-    { left: 0.23, top: 0.70, width: 0.34, height: 0.18 },
-    "names",
-    [{ psm: 6 }, { psm: 11 }]
-  );
-
-  const bottomStatsText = await readRegionText(
-    buffer,
-    { left: 0.60, top: 0.70, width: 0.22, height: 0.18 },
-    "stats",
-    [
-      { psm: 6, whitelist: "0123456789 " },
-      { psm: 11, whitelist: "0123456789 " }
-    ]
-  );
-
-  const topNames = parseNameLines(topNamesText);
-  const bottomNames = parseNameLines(bottomNamesText);
-  const topStats = parseStatsLines(topStatsText);
-  const bottomStats = parseStatsLines(bottomStatsText);
-
-  if (!scoreText || !mapText || !topNames.length || !bottomNames.length || !topStats.length || !bottomStats.length) {
+  if (!topTeam.players.length || !bottomTeam.players.length) {
     throw buildError({
       scoreText,
       mapText,
-      topNamesText,
-      topStatsText,
-      bottomNamesText,
-      bottomStatsText
-    });
-  }
-
-  const topPlayers = pairPlayers(topNames, topStats);
-  const bottomPlayers = pairPlayers(bottomNames, bottomStats);
-
-  if (!topPlayers.length || !bottomPlayers.length) {
-    throw buildError({
-      scoreText,
-      mapText,
-      topNamesText,
-      topStatsText,
-      bottomNamesText,
-      bottomStatsText
+      topNamesText: topTeam.debug.namesText,
+      topKillsText: topTeam.debug.killsText,
+      topDeathsText: topTeam.debug.deathsText,
+      topAssistsText: topTeam.debug.assistsText,
+      topHeadshotText: topTeam.debug.headshotText,
+      topDamageText: topTeam.debug.damageText,
+      bottomNamesText: bottomTeam.debug.namesText,
+      bottomKillsText: bottomTeam.debug.killsText,
+      bottomDeathsText: bottomTeam.debug.deathsText,
+      bottomAssistsText: bottomTeam.debug.assistsText,
+      bottomHeadshotText: bottomTeam.debug.headshotText,
+      bottomDamageText: bottomTeam.debug.damageText
     });
   }
 
@@ -408,13 +418,13 @@ export async function parseMatchScreenshot(buffer: Buffer) {
       name: "Спецназ",
       side: "CT",
       score: scoreA,
-      players: topPlayers
+      players: topTeam.players
     },
     {
       name: "Террористы",
       side: "T",
       score: scoreB,
-      players: bottomPlayers
+      players: bottomTeam.players
     }
   ];
 
