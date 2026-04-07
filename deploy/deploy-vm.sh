@@ -44,7 +44,7 @@ install_system_packages() {
 
   log "Устанавливаю системные зависимости"
   sudo apt update
-  sudo apt install -y nginx tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng git curl ca-certificates rsync
+  sudo apt install -y nginx git curl ca-certificates rsync python3 python3-venv python3-pip
 
   if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q "^v${NODE_MAJOR}\."; then
     log "Устанавливаю Node.js ${NODE_MAJOR}"
@@ -72,6 +72,14 @@ install_node_dependencies() {
   log "Устанавливаю npm-зависимости"
   cd "${APP_DIR}"
   npm install
+}
+
+install_python_dependencies() {
+  log "Устанавливаю Python OCR-зависимости"
+  cd "${APP_DIR}"
+  python3 -m venv .venv
+  .venv/bin/pip install --upgrade pip
+  .venv/bin/pip install -r requirements.txt
 }
 
 run_migrations_and_build() {
@@ -176,6 +184,7 @@ main() {
   prepare_app_dir
   ensure_env_file
   install_node_dependencies
+  install_python_dependencies
   run_migrations_and_build
 
   if [[ "${SETUP_SYSTEMD}" == "1" ]]; then

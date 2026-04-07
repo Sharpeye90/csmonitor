@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 import sharp from "sharp";
 
+import { readRegionsWithPaddleOCR, type OcrRegionManifest } from "@/lib/paddle-ocr";
 import type { ParsedPlayer, ParsedTeam } from "@/lib/types";
 
 const execFileAsync = promisify(execFile);
@@ -594,6 +595,28 @@ async function readTeamBlock(buffer: Buffer, block: TeamBlock) {
   };
 }
 
+function readTeamBlockFromTexts(input: {
+  namesText: string;
+  killsText: string;
+  deathsText: string;
+  assistsText: string;
+  headshotText: string;
+  damageText: string;
+}) {
+  const names = parseNameLines(input.namesText);
+  const kills = parseNumbers(input.killsText, 0, 60);
+  const deaths = parseNumbers(input.deathsText, 0, 60);
+  const assists = parseNumbers(input.assistsText, 0, 30);
+  const headshotPct = parseNumbers(input.headshotText, 0, 100);
+  const damage = parseNumbers(input.damageText, 0, 5000);
+  const players = pairTeamPlayers(names, kills, deaths, assists, headshotPct, damage);
+
+  return {
+    players,
+    debug: input
+  };
+}
+
 function parseStatsRow(text: string) {
   const values = parseNumbers(text, 0, 5000);
 
@@ -677,6 +700,50 @@ async function readTeamByRows(buffer: Buffer, block: TeamBlock) {
   };
 }
 
+function readTeamByRowsFromTexts(input: {
+  rowNames: string[];
+  rowStats: string[];
+}) {
+  const rows = input.rowNames.map((nameText, index) => {
+    const statsText = input.rowStats[index] ?? "";
+    const parsedName = parseNameLines(nameText)[0] ?? normalizePlayerName(nameText);
+    const parsedStats = parseStatsRow(statsText);
+
+    return {
+      nameText,
+      statsText,
+      parsedName,
+      parsedStats
+    };
+  });
+
+  const players = rows
+    .map((row) => {
+      const stats = row.parsedStats;
+      return {
+        nickname: row.parsedName,
+        kills: stats?.kills ?? 0,
+        deaths: stats?.deaths ?? 0,
+        assists: stats?.assists ?? null,
+        headshotPct: stats?.headshotPct ?? 0,
+        damage: repairDamage(stats?.damage ?? 0),
+        kda: stats ? (stats.deaths === 0 ? stats.kills : Math.round((stats.kills / stats.deaths) * 100) / 100) : 0
+      } satisfies ParsedPlayer;
+    })
+    .filter((player) => player.nickname);
+
+  return {
+    players,
+    rawNames: rows.map((row) => row.parsedName),
+    debug: Object.fromEntries(
+      rows.flatMap((row, index) => [
+        [`row${index + 1}NameText`, row.nameText],
+        [`row${index + 1}StatsText`, row.statsText]
+      ])
+    )
+  };
+}
+
 function hasMeaningfulStats(players: ParsedPlayer[]) {
   return players.filter((player) => player.kills > 0 || player.deaths > 0 || player.damage > 0).length;
 }
@@ -731,26 +798,65 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     throw new Error("Не удалось определить размеры изображения");
   }
 
-  const [scoreText, topScoreText, bottomScoreText, mapText, mapTextEng, topTeamRows, bottomTeamRows, topTeamColumns, bottomTeamColumns] = await Promise.all([
-    readRegionText(buffer, SCORE_REGION, "score", [
-      { psm: 7, whitelist: "0123456789:-" },
-      { psm: 6, whitelist: "0123456789:-" }
-    ]),
-    readRegionText(buffer, TOP_SCORE_REGION, "score", [
-      { psm: 10, whitelist: "0123456789" },
-      { psm: 7, whitelist: "0123456789" }
-    ]),
-    readRegionText(buffer, BOTTOM_SCORE_REGION, "score", [
-      { psm: 10, whitelist: "0123456789" },
-      { psm: 7, whitelist: "0123456789" }
-    ]),
-    readRegionText(buffer, MAP_REGION, "map", [{ psm: 6 }]),
-    readRegionText(buffer, MAP_REGION, "map", [{ psm: 7, lang: "eng" }, { psm: 6, lang: "eng" }]),
-    readTeamByRows(buffer, TOP_TEAM),
-    readTeamByRows(buffer, BOTTOM_TEAM),
-    readTeamBlock(buffer, TOP_TEAM),
-    readTeamBlock(buffer, BOTTOM_TEAM)
-  ]);
+  const manifests: OcrRegionManifest[] = [
+    { name: "scoreText", ...SCORE_REGION, mode: "score", lang: "en" },
+    { name: "topScoreText", ...TOP_SCORE_REGION, mode: "score", lang: "en" },
+    { name: "bottomScoreText", ...BOTTOM_SCORE_REGION, mode: "score", lang: "en" },
+    { name: "mapText", ...MAP_REGION, mode: "map", lang: "ru" },
+    { name: "mapTextEng", ...MAP_REGION, mode: "map", lang: "en" },
+    { name: "topNamesText", ...TOP_TEAM.names, mode: "names", lang: "ru" },
+    { name: "topKillsText", ...TOP_TEAM.kills, mode: "stats", lang: "en" },
+    { name: "topDeathsText", ...TOP_TEAM.deaths, mode: "stats", lang: "en" },
+    { name: "topAssistsText", ...TOP_TEAM.assists, mode: "stats", lang: "en" },
+    { name: "topHeadshotText", ...TOP_TEAM.headshotPct, mode: "stats", lang: "en" },
+    { name: "topDamageText", ...TOP_TEAM.damage, mode: "stats", lang: "en" },
+    { name: "bottomNamesText", ...BOTTOM_TEAM.names, mode: "names", lang: "ru" },
+    { name: "bottomKillsText", ...BOTTOM_TEAM.kills, mode: "stats", lang: "en" },
+    { name: "bottomDeathsText", ...BOTTOM_TEAM.deaths, mode: "stats", lang: "en" },
+    { name: "bottomAssistsText", ...BOTTOM_TEAM.assists, mode: "stats", lang: "en" },
+    { name: "bottomHeadshotText", ...BOTTOM_TEAM.headshotPct, mode: "stats", lang: "en" },
+    { name: "bottomDamageText", ...BOTTOM_TEAM.damage, mode: "stats", lang: "en" },
+    ...Array.from({ length: 5 }, (_, index) => [
+      { name: `topRow${index + 1}NameText`, ...buildRowRegion(TOP_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
+      { name: `topRow${index + 1}StatsText`, ...buildStatsRowRegion(TOP_TEAM, index), mode: "stats" as const, lang: "en" as const },
+      { name: `bottomRow${index + 1}NameText`, ...buildRowRegion(BOTTOM_TEAM.names, index), mode: "names" as const, lang: "ru" as const },
+      { name: `bottomRow${index + 1}StatsText`, ...buildStatsRowRegion(BOTTOM_TEAM, index), mode: "stats" as const, lang: "en" as const }
+    ]).flat()
+  ];
+
+  const ocrRegions = await readRegionsWithPaddleOCR(manifests, buffer);
+  const ocrMap = new Map(ocrRegions.map((item) => [item.name, item]));
+  const getText = (name: string) => ocrMap.get(name)?.text ?? "";
+
+  const scoreText = getText("scoreText");
+  const topScoreText = getText("topScoreText");
+  const bottomScoreText = getText("bottomScoreText");
+  const mapText = getText("mapText");
+  const mapTextEng = getText("mapTextEng");
+  const topTeamColumns = readTeamBlockFromTexts({
+    namesText: getText("topNamesText"),
+    killsText: getText("topKillsText"),
+    deathsText: getText("topDeathsText"),
+    assistsText: getText("topAssistsText"),
+    headshotText: getText("topHeadshotText"),
+    damageText: getText("topDamageText")
+  });
+  const bottomTeamColumns = readTeamBlockFromTexts({
+    namesText: getText("bottomNamesText"),
+    killsText: getText("bottomKillsText"),
+    deathsText: getText("bottomDeathsText"),
+    assistsText: getText("bottomAssistsText"),
+    headshotText: getText("bottomHeadshotText"),
+    damageText: getText("bottomDamageText")
+  });
+  const topTeamRows = readTeamByRowsFromTexts({
+    rowNames: Array.from({ length: 5 }, (_, index) => getText(`topRow${index + 1}NameText`)),
+    rowStats: Array.from({ length: 5 }, (_, index) => getText(`topRow${index + 1}StatsText`))
+  });
+  const bottomTeamRows = readTeamByRowsFromTexts({
+    rowNames: Array.from({ length: 5 }, (_, index) => getText(`bottomRow${index + 1}NameText`)),
+    rowStats: Array.from({ length: 5 }, (_, index) => getText(`bottomRow${index + 1}StatsText`))
+  });
 
   const topPlayers = mergeTeamPlayers({
     roster: TOP_TEAM_ROSTER,
@@ -829,6 +935,15 @@ export async function parseMatchScreenshot(buffer: Buffer) {
     score: `${finalScoreA}-${finalScoreB}`,
     scoreA: finalScoreA,
     scoreB: finalScoreB,
-    teams
+    teams,
+    diagnostics: {
+      ocrTexts: Object.fromEntries(ocrRegions.map((region) => [region.name, region.text])),
+      zones: ocrRegions.map((region) => ({
+        name: region.name,
+        image: region.image,
+        processedImage: region.processedImage,
+        text: region.text
+      }))
+    }
   };
 }

@@ -1,5 +1,7 @@
 .next
 node_modules
+.venv
+.paddlex
 .env
 .env.local
 dist

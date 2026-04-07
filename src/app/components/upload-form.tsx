@@ -5,9 +5,15 @@ import { useState, useTransition } from "react";
 
 import type { SavedMatch, SeasonSummary } from "@/lib/types";
 
+type UploadDetails = {
+  parsedPreview?: string;
+  ocrTexts?: Record<string, string>;
+  zones?: Array<{ name: string; image: string; processedImage: string; text: string }>;
+};
+
 type UploadState = {
   error: string | null;
-  details?: Record<string, string> | null;
+  details?: UploadDetails | null;
   testMode?: boolean;
   match: SavedMatch | null;
 };
@@ -29,7 +35,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
 
     if (!response.ok) {
       const error = new Error(payload.error || "Не удалось обработать скриншот") as Error & {
-        details?: Record<string, string> | null;
+        details?: UploadDetails | null;
       };
       error.details = payload.details ?? null;
       throw error;
@@ -56,7 +62,7 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
                 error: error instanceof Error ? error.message : "Неизвестная ошибка",
                 details:
                   error && typeof error === "object" && "details" in error
-                    ? ((error as { details?: Record<string, string> | null }).details ?? null)
+                    ? ((error as { details?: UploadDetails | null }).details ?? null)
                     : null,
                 match: null
               });
@@ -118,8 +124,27 @@ export function UploadForm({ seasons }: { seasons: SeasonSummary[] }) {
               lineHeight: 1.5
             }}
           >
-            {JSON.stringify(state.details, null, 2)}
+            {JSON.stringify(
+              {
+                parsedPreview: state.details.parsedPreview,
+                ocrTexts: state.details.ocrTexts
+              },
+              null,
+              2
+            )}
           </pre>
+          {state.details.zones?.length ? (
+            <div className="zones-grid">
+              {state.details.zones.map((zone) => (
+                <div key={zone.name} className="zone-card">
+                  <strong>{zone.name}</strong>
+                  <img src={zone.image} alt={zone.name} />
+                  <img src={zone.processedImage} alt={`${zone.name} processed`} />
+                  <pre>{zone.text || "(empty)"}</pre>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </details>
       ) : null}
 

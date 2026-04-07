@@ -104,7 +104,8 @@ export async function POST(request: Request) {
       return NextResponse.json({
         error: null,
         details: {
-          parsedPreview: JSON.stringify(preview, null, 2)
+          parsedPreview: JSON.stringify(preview, null, 2),
+          ...(parsed.diagnostics ?? {})
         },
         match: toClientMatch({
           id: "preview",
@@ -174,7 +175,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       error: null,
       details: {
-        parsedPreview: JSON.stringify(preview, null, 2)
+        parsedPreview: JSON.stringify(preview, null, 2),
+        ...(parsed.diagnostics ?? {})
       },
       match: toClientMatch(saved),
       testMode: false

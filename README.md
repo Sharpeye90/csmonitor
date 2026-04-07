@@ -7,7 +7,7 @@
 - принимает JPG, PNG и WebP со скриншотом итогового табло CS2;
 - определяет дату матча по времени загрузки;
 - если загрузка произошла до `06:00` по `APP_TIMEZONE`, записывает матч предыдущим днем;
-- запускает локальный OCR внутри сервиса через `tesseract`, без внешнего vision API;
+- запускает локальный OCR внутри сервиса через `PaddleOCR`, без внешнего vision API;
 - извлекает карту, итоговый счет, игроков по командам, убийства, смерти, урон и `%ГЛ`;
 - формирует `KDA` в формате `Убийства/Смерти`;
 - позволяет создать сезоны с диапазоном дат;
@@ -19,7 +19,7 @@
 - `Next.js 15`
 - `Prisma`
 - `PostgreSQL`
-- локальный `tesseract-ocr`
+- `PaddleOCR`
 - `nginx + systemd` для запуска на виртуальной машине
 
 ## Переменные окружения
@@ -30,16 +30,11 @@
 
 - `DATABASE_URL`
 - `APP_TIMEZONE`
-- `TESSERACT_BIN`
-- `OCR_LANG`
-
 Пример:
 
 ```env
 DATABASE_URL="postgresql://cs2_user:strong_password@10.10.10.20:5432/cs2_stats?schema=public"
 APP_TIMEZONE="Europe/Moscow"
-TESSERACT_BIN="tesseract"
-OCR_LANG="eng+rus"
 ```
 
 ## Локальный запуск
@@ -58,13 +53,21 @@ cp .env.example .env
 
 3. Поднять PostgreSQL и заполнить `DATABASE_URL`.
 
-4. Применить миграции:
+4. Создать Python-окружение и поставить OCR-зависимости:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+```
+
+5. Применить миграции:
 
 ```bash
 npx prisma migrate deploy
 ```
 
-5. Запустить dev-сервер:
+6. Запустить dev-сервер:
 
 ```bash
 npm run dev
@@ -88,8 +91,9 @@ APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMA
 
 Скрипт:
 
-- установит `nginx`, `nodejs`, `tesseract`;
+- установит `nginx`, `nodejs`, `python3`;
 - поставит npm-зависимости;
+- создаст `.venv` и установит `PaddleOCR`;
 - применит Prisma migration;
 - соберет приложение;
 - создаст `systemd` unit;
@@ -107,7 +111,7 @@ APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMA
 
 ```bash
 sudo apt update
-sudo apt install -y nginx postgresql postgresql-contrib tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng git curl
+sudo apt install -y nginx postgresql postgresql-contrib git curl python3 python3-venv python3-pip
 ```
 
 Установить Node.js 22:
@@ -157,13 +161,14 @@ nano .env
 ```env
 DATABASE_URL="postgresql://cs2_user:strong_password@10.10.10.20:5432/cs2_stats?schema=public"
 APP_TIMEZONE="Europe/Moscow"
-TESSERACT_BIN="tesseract"
-OCR_LANG="eng+rus"
 ```
 
 ### 5. Применить миграции и собрать приложение
 
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
 npx prisma migrate deploy
 npm run build
 ```
@@ -273,7 +278,7 @@ APP_USER=$USER APP_DIR=/var/www/cs2-parser APP_HOST=10.10.10.10 DOMAIN=YOUR_DOMA
 
 ## Ограничения текущего OCR
 
-Локальный OCR работает полностью внутри сервиса, но качество распознавания все еще зависит от:
+OCR работает полностью внутри сервиса через PaddleOCR, но качество распознавания все еще зависит от:
 
 - качества исходного скриншота;
 - размера текста;
