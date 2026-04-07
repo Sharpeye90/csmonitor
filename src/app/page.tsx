@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db";
 import { formatRuDate } from "@/lib/date";
-import { ResetDatabaseButton } from "@/app/components/reset-database-button";
 import { SeasonForm } from "@/app/components/season-form";
 import { UploadForm } from "@/app/components/upload-form";
 
@@ -69,6 +68,7 @@ async function getPlayerSeasonStats() {
         seasonName: string;
         nickname: string;
         matches: number;
+        rounds: number;
         kills: number;
         deaths: number;
         damage: number;
@@ -86,6 +86,7 @@ async function getPlayerSeasonStats() {
             seasonName,
             nickname: player.nickname,
             matches: 0,
+            rounds: 0,
             kills: 0,
             deaths: 0,
             damage: 0,
@@ -93,6 +94,7 @@ async function getPlayerSeasonStats() {
           };
 
           existing.matches += 1;
+          existing.rounds += match.scoreA + match.scoreB;
           existing.kills += player.kills;
           existing.deaths += player.deaths;
           existing.damage += player.damage;
@@ -107,7 +109,7 @@ async function getPlayerSeasonStats() {
         ...item,
         avgKdaPerMatch:
           item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
-        avgDamagePerMatch: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
+        avgDamagePerRound: item.rounds === 0 ? 0 : Math.round((item.damage / item.rounds) * 10) / 10,
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
       .sort((left, right) => {
@@ -115,7 +117,7 @@ async function getPlayerSeasonStats() {
           return left.seasonName.localeCompare(right.seasonName, "ru");
         }
 
-        return right.avgDamagePerMatch - left.avgDamagePerMatch;
+        return right.avgDamagePerRound - left.avgDamagePerRound;
       });
   } catch {
     return [];
@@ -143,6 +145,7 @@ async function getPlayerMapStats() {
         mapName: string;
         nickname: string;
         matches: number;
+        rounds: number;
         kills: number;
         deaths: number;
         damage: number;
@@ -158,6 +161,7 @@ async function getPlayerMapStats() {
             mapName: match.mapName,
             nickname: player.nickname,
             matches: 0,
+            rounds: 0,
             kills: 0,
             deaths: 0,
             damage: 0,
@@ -165,6 +169,7 @@ async function getPlayerMapStats() {
           };
 
           existing.matches += 1;
+          existing.rounds += match.scoreA + match.scoreB;
           existing.kills += player.kills;
           existing.deaths += player.deaths;
           existing.damage += player.damage;
@@ -181,7 +186,7 @@ async function getPlayerMapStats() {
         ...item,
         avgKda:
           item.matches === 0 ? 0 : Math.round(((item.deaths === 0 ? item.kills : item.kills / item.deaths) / item.matches) * 100) / 100,
-        avgDamage: item.matches === 0 ? 0 : Math.round(item.damage / item.matches),
+        avgDamagePerRound: item.rounds === 0 ? 0 : Math.round((item.damage / item.rounds) * 10) / 10,
         avgHeadshotPct: Math.round((item.headshotPctTotal / item.matches) * 10) / 10
       }))
       .sort((left, right) => {
@@ -192,7 +197,7 @@ async function getPlayerMapStats() {
           return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
         }
 
-        return right.avgDamage - left.avgDamage;
+        return right.avgDamagePerRound - left.avgDamagePerRound;
       });
   } catch {
     return [];
@@ -234,6 +239,7 @@ async function getDailyPlayerRatings() {
         seasonName: string;
         nickname: string;
         matches: number;
+        rounds: number;
         kdaTotal: number;
         damageTotal: number;
       }
@@ -252,11 +258,13 @@ async function getDailyPlayerRatings() {
             seasonName,
             nickname: player.nickname,
             matches: 0,
+            rounds: 0,
             kdaTotal: 0,
             damageTotal: 0
           };
 
           existing.matches += 1;
+          existing.rounds += match.scoreA + match.scoreB;
           existing.kdaTotal += player.kda;
           existing.damageTotal += player.damage;
           grouped.set(key, existing);
@@ -277,6 +285,7 @@ async function getDailyPlayerRatings() {
       seasonName: string;
       nickname: string;
       matches: number;
+      rounds: number;
       avgKda: number;
       avgDamage: number;
       kdaRank: number;
@@ -288,7 +297,7 @@ async function getDailyPlayerRatings() {
       const enriched = rows.map((row) => ({
         ...row,
         avgKda: Math.round((row.kdaTotal / row.matches) * 100) / 100,
-        avgDamage: Math.round(row.damageTotal / row.matches)
+        avgDamage: row.rounds === 0 ? 0 : Math.round((row.damageTotal / row.rounds) * 10) / 10
       }));
       const kdaRanks = rankValuesDescending(enriched, (row) => row.avgKda);
       const damageRanks = rankValuesDescending(enriched, (row) => row.avgDamage);
@@ -303,6 +312,7 @@ async function getDailyPlayerRatings() {
           seasonName: row.seasonName,
           nickname: row.nickname,
           matches: row.matches,
+          rounds: row.rounds,
           avgKda: row.avgKda,
           avgDamage: row.avgDamage,
           kdaRank,
@@ -333,9 +343,10 @@ async function getSeasonPlayerRatings() {
         seasonName: string;
         nickname: string;
         days: number;
+        rounds: number;
         totalPoints: number;
         avgKdaTotal: number;
-        avgDamageTotal: number;
+        damageTotal: number;
         recentPoints: Array<{ playedOnKey: string; points: number }>;
       }
     >();
@@ -346,16 +357,18 @@ async function getSeasonPlayerRatings() {
         seasonName: row.seasonName,
         nickname: row.nickname,
         days: 0,
+        rounds: 0,
         totalPoints: 0,
         avgKdaTotal: 0,
-        avgDamageTotal: 0,
+        damageTotal: 0,
         recentPoints: []
       };
 
       existing.days += 1;
+      existing.rounds += row.rounds;
       existing.totalPoints += row.points;
       existing.avgKdaTotal += row.avgKda;
-      existing.avgDamageTotal += row.avgDamage;
+      existing.damageTotal += row.avgDamage * row.rounds;
       existing.recentPoints.push({ playedOnKey: row.playedOnKey, points: row.points });
       grouped.set(key, existing);
     }
@@ -380,10 +393,11 @@ async function getSeasonPlayerRatings() {
           seasonName: row.seasonName,
           nickname: row.nickname,
           days: row.days,
+          rounds: row.rounds,
           totalPoints: row.totalPoints,
           avgPointsPerDay: Math.round((row.totalPoints / row.days) * 10) / 10,
           avgKda: Math.round((row.avgKdaTotal / row.days) * 100) / 100,
-          avgDamage: Math.round(row.avgDamageTotal / row.days),
+          avgDamage: row.rounds === 0 ? 0 : Math.round((row.damageTotal / row.rounds) * 10) / 10,
           trend,
           previousPoints,
           latestPoints
@@ -436,7 +450,6 @@ export default async function HomePage() {
         />
         <div className="stacked-panels">
           <SeasonForm />
-          <ResetDatabaseButton />
         </div>
       </section>
 
@@ -451,6 +464,7 @@ export default async function HomePage() {
                     <th>Сезон</th>
                     <th>Игрок</th>
                     <th>Матчи</th>
+                    <th>Раунды</th>
                     <th>KDA ср.</th>
                     <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
@@ -462,8 +476,9 @@ export default async function HomePage() {
                       <td>{row.seasonName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
+                      <td>{row.rounds}</td>
                       <td>{row.avgKdaPerMatch.toFixed(2)}</td>
-                      <td>{row.avgDamagePerMatch}</td>
+                      <td>{row.avgDamagePerRound}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
                   ))}
@@ -485,6 +500,7 @@ export default async function HomePage() {
                     <th>Карта</th>
                     <th>Игрок</th>
                     <th>Матчи</th>
+                    <th>Раунды</th>
                     <th>KDA ср.</th>
                     <th>Урон ср.</th>
                     <th>%ГЛ ср.</th>
@@ -496,8 +512,9 @@ export default async function HomePage() {
                       <td>{row.mapName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
+                      <td>{row.rounds}</td>
                       <td>{row.avgKda.toFixed(2)}</td>
-                      <td>{row.avgDamage}</td>
+                      <td>{row.avgDamagePerRound}</td>
                       <td>{row.avgHeadshotPct}</td>
                     </tr>
                   ))}
@@ -522,6 +539,7 @@ export default async function HomePage() {
                     <th>Сезон</th>
                     <th>Игрок</th>
                     <th>Матчи</th>
+                    <th>Раунды</th>
                     <th>KDA ср.</th>
                     <th>KDA место</th>
                     <th>Урон ср.</th>
@@ -536,6 +554,7 @@ export default async function HomePage() {
                       <td>{row.seasonName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.matches}</td>
+                      <td>{row.rounds}</td>
                       <td>{row.avgKda.toFixed(2)}</td>
                       <td>{row.kdaRank}</td>
                       <td>{row.avgDamage}</td>
@@ -563,6 +582,7 @@ export default async function HomePage() {
                     <th>Сезон</th>
                     <th>Игрок</th>
                     <th>Игровые дни</th>
+                    <th>Раунды</th>
                     <th>KDA ср.</th>
                     <th>Урон ср.</th>
                     <th>Очки за день ср.</th>
@@ -576,6 +596,7 @@ export default async function HomePage() {
                       <td>{row.seasonName}</td>
                       <td>{row.nickname}</td>
                       <td>{row.days}</td>
+                      <td>{row.rounds}</td>
                       <td>{row.avgKda.toFixed(2)}</td>
                       <td>{row.avgDamage}</td>
                       <td>{row.avgPointsPerDay}</td>
