@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Match {
+  id         String       @id @default(cuid())
+  uploadedAt DateTime
+  playedOn   DateTime
+  mapName    String
+  scoreA     Int
+  scoreB     Int
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  teams      Team[]
+
+  @@index([playedOn])
+  @@index([mapName])
+}
+
+model Team {
+  id        String       @id @default(cuid())
+  matchId   String
+  name      String
+  side      String
+  score     Int
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  match     Match        @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  players   PlayerStat[]
+
+  @@index([matchId])
+}
+
+model PlayerStat {
+  id             String   @id @default(cuid())
+  teamId         String
+  nickname       String
+  kills          Int
+  deaths         Int
+  assists        Int?
+  kda            String
+  damage         Int
+  headshotPct    Float
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  team           Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([nickname])
+}

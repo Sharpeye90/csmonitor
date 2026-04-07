@@ -1,0 +1,139 @@
+"use client";
+
+import { useState, useTransition } from "react";
+
+import type { SavedMatch } from "@/lib/types";
+
+type UploadState = {
+  error: string | null;
+  match: SavedMatch | null;
+};
+
+export function UploadForm() {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [state, setState] = useState<UploadState>({ error: null, match: null });
+  const [isPending, startTransition] = useTransition();
+  const parsedMatch = state.match;
+
+  async function handleSubmit(formData: FormData) {
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      body: formData
+    });
+
+    const payload = (await response.json()) as UploadState;
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Не удалось обработать скриншот");
+    }
+
+    setState(payload);
+  }
+
+  return (
+    <div className="panel">
+      <h2 className="section-title">Загрузка скриншота</h2>
+      <form
+        className="upload-form"
+        action={(formData) =>
+          startTransition(async () => {
+            try {
+              setState({ error: null, match: null });
+              await handleSubmit(formData);
+            } catch (error) {
+              setState({
+                error: error instanceof Error ? error.message : "Неизвестная ошибка",
+                match: null
+              });
+            }
+          })
+        }
+      >
+        <label>
+          Скриншот результата матча
+          <input
+            required
+            name="screenshot"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+
+              if (!file) {
+                setPreviewUrl(null);
+                return;
+              }
+
+              setPreviewUrl(URL.createObjectURL(file));
+            }}
+          />
+        </label>
+        <button type="submit" disabled={isPending}>
+          {isPending ? "Обрабатываем..." : "Распознать и сохранить"}
+        </button>
+      </form>
+
+      {state.error ? <p className="error">{state.error}</p> : null}
+
+      {parsedMatch ? (
+        <div className="match-card" style={{ marginTop: 18 }}>
+          <header>
+            <div>
+              <h3>{parsedMatch.mapName}</h3>
+              <p className="muted" style={{ marginBottom: 0 }}>
+                Дата матча: {parsedMatch.playedOn}
+              </p>
+            </div>
+            <span className="score-chip">
+              {parsedMatch.scoreA}-{parsedMatch.scoreB}
+            </span>
+          </header>
+
+          <div className="teams-grid">
+            {parsedMatch.teams.map((team) => (
+              <div key={`${parsedMatch.id}-${team.side}-${team.name}`} className="team-card">
+                <header>
+                  <h4>
+                    {team.name} • {team.side}
+                  </h4>
+                  <span>{team.score}</span>
+                </header>
+
+                <table className="players-table">
+                  <thead>
+                    <tr>
+                      <th>Игрок</th>
+                      <th>У</th>
+                      <th>С</th>
+                      <th>KDA</th>
+                      <th>Урон</th>
+                      <th>%ГЛ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {team.players.map((player) => (
+                      <tr key={`${team.name}-${player.nickname}`}>
+                        <td>{player.nickname}</td>
+                        <td>{player.kills}</td>
+                        <td>{player.deaths}</td>
+                        <td>{player.kda}</td>
+                        <td>{player.damage}</td>
+                        <td>{player.headshotPct}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {previewUrl ? (
+        <div className="preview-box" style={{ marginTop: 18 }}>
+          <img src={previewUrl} alt="Предпросмотр загруженного скриншота" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
